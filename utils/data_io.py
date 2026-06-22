@@ -197,3 +197,41 @@ def load_npy(base_dir, fish, filename):
     arr = np.load(str(path))
     print(f"Loaded {path}  shape={arr.shape}")
     return arr
+
+
+# ============================================================
+# FIGURE PATH HELPERS
+# ============================================================
+
+def fish_fig_dir(dir_analysis, fish):
+    """
+    Per-fish figure directory.
+
+    Returns
+    -------
+    Path
+        dir_analysis / proj_ID / expt_ID / figures
+    """
+    p = fish_dir(dir_analysis, fish) / "figures"
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+def comparison_fig_dir(dir_analysis, comparison_tag):
+    """
+    Group-level comparison figure directory.
+
+    Parameters
+    ----------
+    dir_analysis : str
+    comparison_tag : str
+        e.g. "HCRT-TRPV1_vs_CTRL" — from config.COMPARISON_TAG
+
+    Returns
+    -------
+    Path
+        dir_analysis / comparisons / comparison_tag / figures
+    """
+    p = Path(dir_analysis) / "comparisons" / comparison_tag / "figures"
+    p.mkdir(parents=True, exist_ok=True)
+    return p

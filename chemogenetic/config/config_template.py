@@ -140,3 +140,32 @@ def get_group_meta(fish):
     """Return (group_tag, plot_meta_dict) for a fish tuple."""
     tag = GROUP_OF_FISH[fish]
     return tag, PLOT_META[tag]
+
+
+# ============================================================
+# COMPARISON TAG + FIGURE PATH
+# ============================================================
+# TODO: update if EXPT_TAG / CTRL_TAG changed above
+COMPARISON_TAG = f"{EXPT_TAG}_vs_{CTRL_TAG}"   # e.g. "YNT185_vs_CTRL"
+
+
+def comparison_fig_dir(dir_analysis, comparison_tag=None):
+    """
+    Return the figure directory for a group-level comparison.
+
+    Parameters
+    ----------
+    dir_analysis : str
+    comparison_tag : str or None
+        Defaults to COMPARISON_TAG from this config.
+
+    Returns
+    -------
+    Path
+        dir_analysis / comparisons / comparison_tag / figures
+    """
+    from pathlib import Path
+    tag = comparison_tag if comparison_tag is not None else COMPARISON_TAG
+    p = Path(dir_analysis) / "comparisons" / tag / "figures"
+    p.mkdir(parents=True, exist_ok=True)
+    return p
