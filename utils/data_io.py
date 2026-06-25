@@ -235,3 +235,10 @@ def comparison_fig_dir(dir_analysis, comparison_tag):
     p = Path(dir_analysis) / "comparisons" / comparison_tag / "figures"
     p.mkdir(parents=True, exist_ok=True)
     return p
+
+# ============================================================
+# TIMESTAMP LOGGING
+# ============================================================
+
+def log_step(msg):
+    print(f"\n[{time.strftime('%Y-%m-%d %H:%M:%S')}] {msg}", flush=True)

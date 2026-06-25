@@ -162,3 +162,11 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+#%%
+import numpy as np
+import matplotlib.pyplot as plt
+mip = np.load('/tmp/mip_check.npy')
+plt.imshow(mip, cmap='gray')
+plt.colorbar()
+plt.show()

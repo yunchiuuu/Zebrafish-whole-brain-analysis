@@ -22,7 +22,7 @@ Outputs saved per fish under dir_analysis / proj_ID / expt_ID/:
     rho_tonic_lag_grid_sec.npy   — lag values, shape (n_lags,)
 
 Location:
-    ~/Zebrafish-whole-brain-analysis/chemogenetic/tonic/spearman.py
+    ~/Zebrafish-whole-brain-analysis/chemogenetic/spearman.py
 """
 
 import gc

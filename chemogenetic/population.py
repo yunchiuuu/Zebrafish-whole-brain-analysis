@@ -12,7 +12,7 @@ so they can be called from run_figures.py after loading.
 They never load data themselves — data loading is the run code's job.
 
 Location:
-    ~/Zebrafish-whole-brain-analysis/chemogenetic/visualization/population.py
+    ~/Zebrafish-whole-brain-analysis/chemogenetic/population.py
 """
 
 from pathlib import Path
