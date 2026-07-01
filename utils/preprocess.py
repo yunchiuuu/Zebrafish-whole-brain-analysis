@@ -15,11 +15,13 @@ Location:
 """
 
 import gc
-
+import os
 import numpy as np
 from joblib import Parallel, delayed
 from scipy.ndimage import percentile_filter
 from tqdm.auto import tqdm
+import h5py
+from pathlib import Path
 
 
 # ============================================================
@@ -209,3 +211,143 @@ def compute_f_phasic(
         f"denom_mode={denom_mode!r}, chunk_cells={chunk_cells}, n_jobs={n_jobs}"
     )
     return Fp_all
+
+
+
+
+def estimate_background(
+    fish,
+    dir_voluseg,
+    n_volumes=100,
+    patch_size=10,
+    seed=0,
+):
+    """
+    Estimate camera background (dark offset) for one fish from raw volume HDF5s.
+
+    Samples N evenly-spaced volumes from {dir_voluseg}/{proj_ID}/{expt_ID}/input/,
+    extracts 10x10 pixel patches from the top-left and bottom-left corners across
+    all z-planes, and returns the median as a single scalar F_dark.
+
+    Corner choice rationale:
+        - Left side corners are away from the eye (right side) which can
+          contaminate higher z-planes with fluorescence bleed
+        - Both corners are in the dark region outside the brain/agar
+
+    Parameters
+    ----------
+    fish : tuple of (str, str)
+        (proj_ID, expt_ID)
+    dir_voluseg : str or Path
+        Base voluseg directory (config.dir_voluseg).
+    n_volumes : int
+        Number of evenly-spaced volumes to sample (default 100).
+    patch_size : int
+        Side length of corner patch in pixels (default 10 → 10x10 patch).
+    seed : int
+        Not used (deterministic even-spacing), kept for API consistency.
+
+    Returns
+    -------
+    f_dark : float
+        Median pixel value across all sampled patches — the camera background scalar.
+    patch_medians : dict
+        Per-corner median values for diagnostic use:
+        {'top_left': float, 'bottom_left': float}
+
+    Notes
+    -----
+    Volume files are expected at:
+        {dir_voluseg}/{proj_ID}/{expt_ID}/input/volume*.h5
+    Each file contains dataset 'default' with shape (n_planes, dim1, dim2), dtype uint16.
+    """
+    proj_ID, expt_ID = fish
+    input_dir = Path(dir_voluseg) / proj_ID / expt_ID / "input"
+
+    if not input_dir.exists():
+        raise FileNotFoundError(f"Input directory not found: {input_dir}")
+
+    # find and sort all volume HDF5 files
+    vol_files = sorted(input_dir.glob("volume*.h5"))
+    if len(vol_files) == 0:
+        raise FileNotFoundError(f"No volume*.h5 files found in {input_dir}")
+
+    # sample N evenly-spaced volumes
+    indices = np.linspace(0, len(vol_files) - 1, min(n_volumes, len(vol_files)),
+                          dtype=int)
+    sampled_files = [vol_files[i] for i in indices]
+
+    # read one file to get shape
+    with h5py.File(str(sampled_files[0]), "r") as f:
+        vol0 = f["default"][:]
+    n_planes, dim1, dim2 = vol0.shape
+
+    # corner patch indices — top-left and bottom-left only
+    # rows: first and last `patch_size` rows; cols: first `patch_size` cols
+    patches_def = {
+        "top_left":    (slice(0, patch_size),          slice(0, patch_size)),
+        "bottom_left": (slice(dim1 - patch_size, dim1), slice(0, patch_size)),
+    }
+
+    all_values = {k: [] for k in patches_def}
+
+    for fpath in sampled_files:
+        with h5py.File(str(fpath), "r") as f:
+            vol = f["default"][:]    # shape (n_planes, dim1, dim2)
+
+        for corner, (row_sl, col_sl) in patches_def.items():
+            # extract patch across all z-planes: shape (n_planes, patch_size, patch_size)
+            patch = vol[:, row_sl, col_sl].astype(np.float32)
+            all_values[corner].append(patch.ravel())
+
+    # compute per-corner medians for diagnostics
+    patch_medians = {
+        corner: float(np.median(np.concatenate(vals)))
+        for corner, vals in all_values.items()
+    }
+
+    # pool all corners → single scalar
+    all_pooled = np.concatenate([
+        np.concatenate(vals) for vals in all_values.values()
+    ])
+    f_dark = float(np.median(all_pooled))
+
+    return f_dark, patch_medians
+
+
+def subtract_background(f_raw, f_dark, clip_min=0.0):
+    """
+    Subtract camera background offset from raw fluorescence traces.
+
+    Applied before F_tonic/F_phasic decomposition so that both
+    downstream computations operate on true fluorescence (offset-removed).
+
+    Parameters
+    ----------
+    f_raw : np.ndarray, shape (n_cells, T)
+        Raw fluorescence traces from voluseg.
+    f_dark : float
+        Camera background scalar from estimate_background().
+    clip_min : float
+        Minimum value after subtraction (default 0.0 — clips negative values
+        that can arise from read noise). Set to None to disable clipping.
+
+    Returns
+    -------
+    f_corrected : np.ndarray, shape (n_cells, T), dtype float32
+        Background-subtracted fluorescence traces.
+
+    Notes
+    -----
+    This implements:
+        F_corrected = F_raw - F_dark
+
+    After this correction:
+        F_tonic  = percentile_10(F_corrected, sliding window)
+        F_phasic = (F_corrected - F_tonic) / F_tonic
+    Both denominators are now in true-fluorescence units.
+    """
+    f_corrected = np.asarray(f_raw, dtype=np.float32) - float(f_dark)
+    if clip_min is not None:
+        np.clip(f_corrected, clip_min, None, out=f_corrected)
+    return f_corrected

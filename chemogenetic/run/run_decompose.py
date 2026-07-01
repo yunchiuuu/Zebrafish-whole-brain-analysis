@@ -6,23 +6,16 @@ SLURM entry point: compute F_tonic and F_phasic for all fish.
 Reads raw voluseg HDF5 from dir_voluseg, writes .npy arrays to dir_analysis.
 Skips any fish where outputs already exist (set overwrite=True to force).
 
+Pipeline per fish:
+    Step 0: estimate camera background F_dark from raw volume corner patches
+    Step 1: load voluseg traces, subtract F_dark → F_corrected
+    Step 2: compute F_tonic (sliding percentile of F_corrected)
+    Step 3: compute F_phasic (F_corrected - F_tonic) / F_tonic
+
 Usage
 -----
 On HPC (sbatch):
     sbatch submit_decompose.sh
-
-    where submit_decompose.sh contains something like:
-        #!/bin/bash
-        #SBATCH --job-name=decompose
-        #SBATCH --output=logs/decompose-%j.out
-        #SBATCH --nodes=1
-        #SBATCH --cpus-per-task=30
-        #SBATCH --mem=128G
-        #SBATCH --time=06:00:00
-        #SBATCH --partition=expansion
-        source ~/.bashrc
-        conda activate proberlab
-        python ~/Zebrafish-whole-brain-analysis/chemogenetic/run/run_decompose.py
 
 Interactively (login node or salloc session):
     python run_decompose.py
@@ -40,7 +33,7 @@ import numpy as np
 # ---------------------------------------------------------------------------
 # Make repo root importable regardless of working directory
 # ---------------------------------------------------------------------------
-REPO_ROOT = Path(__file__).resolve().parents[2]   # .../Zebrafish-whole-brain-analysis
+REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
 
 from chemogenetic.config.hcrt_trpv1_csn_120min import (
@@ -52,20 +45,29 @@ from chemogenetic.config.hcrt_trpv1_csn_120min import (
     sampling_rate_hz,
 )
 from utils.data_io import fish_dir, read_data
-from utils.preprocess import compute_f_tonic, compute_f_phasic
+from utils.preprocess import (
+    compute_f_tonic,
+    compute_f_phasic,
+    estimate_background,
+    subtract_background,
+)
 
 # ============================================================
-# SETTINGS  (edit here or override via env vars if needed)
+# SETTINGS
 # ============================================================
-OVERWRITE_TONIC  = False   # set True to recompute even if file exists
-OVERWRITE_PHASIC = False   # set True to recompute even if file exists
+OVERWRITE_TONIC  = False
+OVERWRITE_PHASIC = False
 
 DENOM_MODE   = "legacy"    # "legacy" (matches notebook) or "fixed_floor"
-EPS_FLOOR    = 1e-6        # only used when denom_mode="fixed_floor"
+EPS_FLOOR    = 1e-6
 
 CHUNK_CELLS  = 20000
-N_JOBS       = 28          # tune to match --cpus-per-task in your sbatch script
+N_JOBS       = 28
 DTYPE_OUT    = np.float32
+
+# Background estimation settings
+N_BG_VOLUMES = 100    # number of evenly-spaced volumes to sample
+BG_PATCH_SIZE = 10    # corner patch size in pixels (10x10)
 
 
 # ============================================================
@@ -87,18 +89,41 @@ def main():
         fish_out = fish_dir(dir_analysis, fish)
         fish_out.mkdir(parents=True, exist_ok=True)
 
-        tonic_path  = fish_out / "data_array_f_tonic.npy"
-        phasic_path = fish_out / "data_array_f_phasic.npy"
+        tonic_path   = fish_out / "data_array_f_tonic.npy"
+        phasic_path  = fish_out / "data_array_f_phasic.npy"
+        bg_path      = fish_out / "f_dark_scalar.npy"
 
         try:
             # ----------------------------------------------------------
-            # Step 1: F_tonic
+            # Step 0: estimate camera background F_dark
+            # ----------------------------------------------------------
+            if bg_path.exists() and not OVERWRITE_TONIC:
+                f_dark = float(np.load(str(bg_path)))
+                print(f"  ⏩ F_dark exists: {f_dark:.2f} counts (loaded from disk)")
+            else:
+                print(f"  Estimating background from {N_BG_VOLUMES} volumes...")
+                f_dark, patch_medians = estimate_background(
+                    fish=fish,
+                    dir_voluseg=dir_voluseg,
+                    n_volumes=N_BG_VOLUMES,
+                    patch_size=BG_PATCH_SIZE,
+                )
+                np.save(str(bg_path), np.array(f_dark, dtype=np.float32))
+                print(f"  ✅ F_dark = {f_dark:.2f} counts")
+                print(f"     top-left median:    {patch_medians['top_left']:.2f}")
+                print(f"     bottom-left median: {patch_medians['bottom_left']:.2f}")
+
+            # ----------------------------------------------------------
+            # Step 1 + 2: F_tonic
             # ----------------------------------------------------------
             if not OVERWRITE_TONIC and tonic_path.exists():
                 print(f"  ⏩ F_tonic exists, skipping.")
             else:
                 data_array, _, _, _, _ = read_data(fish, dir_voluseg)
                 X = np.asarray(data_array, dtype=np.float32)
+
+                # subtract camera background before decomposition
+                X = subtract_background(X, f_dark, clip_min=0.0)
 
                 Ft = compute_f_tonic(
                     X,
@@ -119,7 +144,7 @@ def main():
                 gc.collect()
 
             # ----------------------------------------------------------
-            # Step 2: F_phasic  (requires F_tonic to exist)
+            # Step 3: F_phasic  (requires F_tonic to exist)
             # ----------------------------------------------------------
             if not OVERWRITE_PHASIC and phasic_path.exists():
                 print(f"  ⏩ F_phasic exists, skipping.")
@@ -132,6 +157,9 @@ def main():
 
                 data_array, _, _, _, _ = read_data(fish, dir_voluseg)
                 X  = np.asarray(data_array, dtype=np.float32)
+
+                # subtract camera background before decomposition
+                X  = subtract_background(X, f_dark, clip_min=0.0)
                 Ft = np.load(str(tonic_path), mmap_mode="r")
 
                 Fp = compute_f_phasic(
@@ -162,11 +190,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-#%%
-import numpy as np
-import matplotlib.pyplot as plt
-mip = np.load('/tmp/mip_check.npy')
-plt.imshow(mip, cmap='gray')
-plt.colorbar()
-plt.show()
