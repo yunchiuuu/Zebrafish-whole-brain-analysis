@@ -111,7 +111,7 @@ rotation_k = cfg.rotation_k
 # LOAD REGISTRATION CONFIG
 # ============================================================
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent / "config"))
 from config_registration import (
     dir_voluseg,
     dir_registration,

@@ -46,7 +46,7 @@ os.makedirs(os.environ["TMPDIR"], exist_ok=True)
 import ants
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from registration.registration import (
+from registration import (
     load_volume_mean,
     register_to_template,
     normalize_image_intensity,
@@ -58,9 +58,10 @@ print(f"✅ TMPDIR={os.environ['TMPDIR']} | ITK threads={n_threads}")
 # CELL 2: Config
 # ============================================================
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+# Cell 2 — replace the sys.path line and import with:
+sys.path.insert(0, str(Path(__file__).resolve().parent / "config"))
 
-from registration.config_registration import (
+from config_registration import (
     dir_voluseg,
     dir_registration,
     MEAN_BRAIN_PATH,
@@ -70,18 +71,18 @@ from registration.config_registration import (
     all_fish_for_mean_brain,
 )
 
-# Index of fish to use as initial template (change if that fish has bad quality)
-TEMPLATE_IDX = 1
-RUN_QC       = True    # set False to skip interactive QC and use all_fish_for_mean_brain
+RUN_QC       = False    # set False to skip interactive QC and use all_fish_for_mean_brain
 
 print(f"Mean brain will be saved to: {MEAN_BRAIN_PATH}")
 print(f"Total fish available: {len(all_fish_for_mean_brain)}")
-print(f"Template fish: {all_fish_for_mean_brain[TEMPLATE_IDX][1]}")
+
 
 # %% ============================================================
 # CELL 3: Interactive QC — inspect volume means, keep/discard fish
 # (set RUN_QC = False in Cell 2 to skip)
 # ============================================================
+# Index of fish to use as initial template (change if that fish has bad quality)
+
 
 def plot_volume_mean_qc(img, expt_ID, n_planes=10):
     arr = img.numpy()
@@ -129,6 +130,9 @@ if RUN_QC:
 # CELL 4: Generate + save mean brain
 # ============================================================
 
+TEMPLATE_IDX = 14
+print(f"Template fish: {all_fish_for_mean_brain[TEMPLATE_IDX][1]}")
+
 # Clip template index to kept fish list
 template_idx  = min(TEMPLATE_IDX, len(fish_for_mean_brain) - 1)
 template_fish = fish_for_mean_brain[template_idx]
@@ -173,3 +177,5 @@ os.makedirs(os.path.dirname(MEAN_BRAIN_PATH), exist_ok=True)
 ants.image_write(mean_ants, MEAN_BRAIN_PATH)
 print(f"\n✅ Mean brain saved: {MEAN_BRAIN_PATH}")
 print(f"   Built from {len(fish_for_mean_brain)} fish.")
+
+# %%

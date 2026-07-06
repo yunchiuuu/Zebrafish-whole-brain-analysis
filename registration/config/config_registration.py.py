@@ -1,28 +1,38 @@
 """
-registration/config_registration.py
-=====================================
+registration/config/config_registration.py
+==========================================
 Shared registration config for ALL chemogenetic experiments.
 
 The mean brain is built ONCE from all fish across all experiment groups
-and used as a common reference for SyN registration. This config is
-experiment-agnostic — not tied to any single drug/condition.
+and used as a common reference for SyN registration.
+
+Design:
+    - Ctrl fish (huc-h2b-g8m_csn_120min) live under their own proj_ID
+      and are processed once. All comparison configs reference their
+      results without reprocessing.
+    - All fish — ctrl, expt, and YNT — share a single mean brain for
+      consistent cross-group registration.
+
+Submission commands (run from ~/zwba):
+    # Step 1 — build mean brain (run after interactive QC sets TEMPLATE_IDX)
+    bash registration/submit_mean_brain.sh
+
+    # Step 2 — register all fish to mean brain (run after Step 1 completes)
+    bash registration/submit_registration_syn.sh
+
+    # Monitor jobs
+    squeue -u $USER
+    tail -f logs/registration/mean_brain.log
+    grep -l "Error\|Traceback" logs/registration/*.log
 
 To add a new experiment batch:
     1. Add its fish tuples to the relevant list below
-    2. Re-run run_registration_mean_brain.py to regenerate the mean brain
-    3. Re-run run_registration_syn.py for ALL fish (mean brain changed)
-
-IMPORTANT — proj_ID change from old config
-------------------------------------------
-Ctrl fish previously lived under hcrt-trpv1_huc-h2b-g8m_csn_120min
-(old design: ctrl copied into expt folder). They now live under their
-own proj_ID: huc-h2b-g8m_csn_120min. If registration was already run
-for these fish, move or re-run their outputs before proceeding:
-    dir_registration / hcrt-trpv1_huc-h2b-g8m_csn_120min / <expt_ID> /
-    → dir_registration / huc-h2b-g8m_csn_120min / <expt_ID> /
+    2. Update TEMPLATE_IDX if a better template fish is available
+    3. Re-run submit_mean_brain.sh to regenerate the mean brain
+    4. Re-run submit_registration_syn.sh for ALL fish (mean brain changed)
 
 Location:
-    ~/Zebrafish-whole-brain-analysis/registration/config_registration.py
+    ~/zwba/registration/config/config_registration.py
 """
 
 from pathlib import Path
@@ -40,6 +50,10 @@ dir_registration = Path("/resnick/groups/Proberlab/yun/lightsheet/analysis_outpu
 # fish are now included. Rebuild required whenever fish are added.
 MEAN_BRAIN_FNAME = "mean_brain_HCRT_TRPV1_YNT_ALL.nii.gz"
 MEAN_BRAIN_PATH  = str(dir_registration / MEAN_BRAIN_FNAME)
+
+# Index into all_fish_for_mean_brain of the best-looking brain from QC.
+# Change this value when adding new fish or if the current template is poor.
+TEMPLATE_IDX = 14
 
 # ============================================================
 # IMAGING SPECS
@@ -76,18 +90,20 @@ ctrl_fish_csn = [
 _EXPT_PROJ_CSN = "hcrt-trpv1_huc-h2b-g8m_csn_120min"
 
 expt_fish_csn = [
+    (_EXPT_PROJ_CSN, "251008_hcrt-trpv1_huc-h2b-g8m_csn_10uM_fish1"),
     (_EXPT_PROJ_CSN, "251008_hcrt-trpv1_huc-h2b-g8m_csn_10uM_fish2"),
     (_EXPT_PROJ_CSN, "251008_hcrt-trpv1_huc-h2b-g8m_csn_10uM_fish3"),
     (_EXPT_PROJ_CSN, "251008_hcrt-trpv1_huc-h2b-g8m_csn_10uM_fish4"),
     (_EXPT_PROJ_CSN, "251102_hcrt-trpv1_huc-h2b-g8m_csn_10uM_fish1"),
     (_EXPT_PROJ_CSN, "251102_hcrt-trpv1_huc-h2b-g8m_csn_10uM_fish2"),
+    (_EXPT_PROJ_CSN, "251126_huc-h2b-g8m_csn_10uM_fish2"),   # NOTE: name lacks hcrt-trpv1 — verify genotype
     (_EXPT_PROJ_CSN, "251210_hcrt-trpv1_huc-h2b-g8m_csn_10uM_fish1"),
     (_EXPT_PROJ_CSN, "251210_hcrt-trpv1_huc-h2b-g8m_csn_10uM_fish2"),
     (_EXPT_PROJ_CSN, "251210_hcrt-trpv1_huc-h2b-g8m_csn_10uM_fish3"),
     (_EXPT_PROJ_CSN, "260514_hcrt-trpv1_huc-h2b-g8m_csn_10uM_fish1"),
     (_EXPT_PROJ_CSN, "260514_hcrt-trpv1_huc-h2b-g8m_csn_10uM_fish2"),
     (_EXPT_PROJ_CSN, "260515_hcrt-trpv1_huc-h2b-g8m_csn_10uM_fish1"),
-]  # N = 11
+]  # N = 13
 
 # ── CSN 120min — EXPT with transient hcrt-h2b-g8m injection ─────────────────
 # Analyzed separately from main cohort (see hcrt_trpv1_csn_inj_vs_ctrl.py)
