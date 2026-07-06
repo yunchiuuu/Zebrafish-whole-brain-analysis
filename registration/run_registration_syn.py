@@ -9,13 +9,13 @@ The mean brain path comes from config_registration.py.
 
 Usage (interactive):
     python registration/run_registration_syn.py \
-        --config chemogenetic/config/hcrt_trpv1_csn_120min.py \
+        --config registration/config_registration.py \
         --expt_ID 251008_hcrt-trpv1_huc-h2b-g8m_csn_10uM_fish4
 
 Usage (sbatch one fish):
     sbatch --cpus-per-task=16 --mem=64G --wrap="\
         python registration/run_registration_syn.py \
-        --config chemogenetic/config/hcrt_trpv1_csn_120min.py \
+        --config registration/config_registration.py \
         --expt_ID 251008_hcrt-trpv1_huc-h2b-g8m_csn_10uM_fish4"
 
 Outputs per fish under {dir_registration}/{proj_ID}/{expt_ID}/:
@@ -113,6 +113,7 @@ rotation_k = cfg.rotation_k
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from config_registration import (
+    dir_voluseg,
     dir_registration,
     MEAN_BRAIN_PATH,
     target_spacing,
@@ -208,7 +209,7 @@ create_folder(proj_ID, expt_ID, dir_registration)
 # Load moving image
 print("Loading volume mean (moving)...")
 mov = load_volume_mean(
-    proj_ID, expt_ID, res_x, res_y, res_z, n_slices, binning=1, rot=rotation_k
+    (proj_ID, expt_ID), dir_voluseg, res_x, res_y, res_z, rotation_k
 )
 
 # Reorient both to LPS

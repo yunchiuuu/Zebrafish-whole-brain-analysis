@@ -61,6 +61,7 @@ print(f"✅ TMPDIR={os.environ['TMPDIR']} | ITK threads={n_threads}")
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from registration.config_registration import (
+    dir_voluseg,
     dir_registration,
     MEAN_BRAIN_PATH,
     n_slices,
@@ -96,10 +97,7 @@ def plot_volume_mean_qc(img, expt_ID, n_planes=10):
 
 
 def load_vol(fish):
-    proj_ID, expt_ID = fish
-    return load_volume_mean(
-        proj_ID, expt_ID, res_x, res_y, res_z, n_slices, binning=1, rot=rotation_k
-    )
+    return load_volume_mean(fish, dir_voluseg, res_x, res_y, res_z, rotation_k)
 
 
 fish_for_mean_brain = list(all_fish_for_mean_brain)
