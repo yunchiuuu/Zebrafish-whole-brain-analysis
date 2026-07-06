@@ -61,7 +61,6 @@ from registration import (
     load_volume_mean,
     syn_registration,
 )
-from utils.data_io import create_folder
 
 print(f"✅ TMPDIR={os.environ['TMPDIR']} | ITK threads={n_threads}")
 
@@ -206,7 +205,7 @@ print(f"  proj_ID:     {proj_ID}")
 print(f"{'='*60}")
 
 out_dir = os.path.join(dir_registration, proj_ID, expt_ID)
-create_folder(proj_ID, expt_ID, dir_registration)
+os.makedirs(out_dir, exist_ok=True)
 
 # Load moving image
 print("Loading volume mean (moving)...")
