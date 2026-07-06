@@ -40,6 +40,7 @@ from pathlib import Path
 # ============================================================
 # PATHS
 # ============================================================
+PYTHON_BIN       = "/resnick/home/ychiu/miniconda3/envs/voluseg/bin/python"
 dir_voluseg      = Path("/resnick/groups/Proberlab/yun/lightsheet/")
 dir_registration = Path("/resnick/groups/Proberlab/yun/lightsheet/analysis_output/registration/")
 
@@ -90,20 +91,18 @@ ctrl_fish_csn = [
 _EXPT_PROJ_CSN = "hcrt-trpv1_huc-h2b-g8m_csn_120min"
 
 expt_fish_csn = [
-    (_EXPT_PROJ_CSN, "251008_hcrt-trpv1_huc-h2b-g8m_csn_10uM_fish1"),
     (_EXPT_PROJ_CSN, "251008_hcrt-trpv1_huc-h2b-g8m_csn_10uM_fish2"),
     (_EXPT_PROJ_CSN, "251008_hcrt-trpv1_huc-h2b-g8m_csn_10uM_fish3"),
     (_EXPT_PROJ_CSN, "251008_hcrt-trpv1_huc-h2b-g8m_csn_10uM_fish4"),
     (_EXPT_PROJ_CSN, "251102_hcrt-trpv1_huc-h2b-g8m_csn_10uM_fish1"),
     (_EXPT_PROJ_CSN, "251102_hcrt-trpv1_huc-h2b-g8m_csn_10uM_fish2"),
-    (_EXPT_PROJ_CSN, "251126_huc-h2b-g8m_csn_10uM_fish2"),   # NOTE: name lacks hcrt-trpv1 — verify genotype
     (_EXPT_PROJ_CSN, "251210_hcrt-trpv1_huc-h2b-g8m_csn_10uM_fish1"),
     (_EXPT_PROJ_CSN, "251210_hcrt-trpv1_huc-h2b-g8m_csn_10uM_fish2"),
     (_EXPT_PROJ_CSN, "251210_hcrt-trpv1_huc-h2b-g8m_csn_10uM_fish3"),
     (_EXPT_PROJ_CSN, "260514_hcrt-trpv1_huc-h2b-g8m_csn_10uM_fish1"),
     (_EXPT_PROJ_CSN, "260514_hcrt-trpv1_huc-h2b-g8m_csn_10uM_fish2"),
     (_EXPT_PROJ_CSN, "260515_hcrt-trpv1_huc-h2b-g8m_csn_10uM_fish1"),
-]  # N = 13
+]  # N = 11
 
 # ── CSN 120min — EXPT with transient hcrt-h2b-g8m injection ─────────────────
 # Analyzed separately from main cohort (see hcrt_trpv1_csn_inj_vs_ctrl.py)
@@ -126,7 +125,6 @@ ynt_fish = [
     (_PROJ_YNT, "260413_huc-h2b-g8m_ynt_10uM_fish4"),
     (_PROJ_YNT, "260414_huc-h2b-g8m_ynt_10uM_fish1"),
     (_PROJ_YNT, "260414_huc-h2b-g8m_ynt_10uM_fish2"),
-    # (_PROJ_YNT, "260414_huc-h2b-g8m_ynt_10uM_fish3"),  # TODO: confirm exists on disk
 ]  # N = 6 confirmed; uncomment fish3 once verified
 
 # --- Add future experiment groups below ---

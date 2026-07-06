@@ -44,8 +44,8 @@ os.makedirs(os.environ["TMPDIR"], exist_ok=True)
 
 import ants
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from registration.registration import (
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from registration import (
     load_volume_mean,
     register_to_template,
     normalize_image_intensity,
@@ -98,6 +98,14 @@ for i, fish in enumerate(fish_for_mean_brain):
 
     save_dir = os.path.join(dir_registration, proj_ID, expt_ID)
     os.makedirs(save_dir, exist_ok=True)
+
+    registered_path = os.path.join(save_dir, "expt_to_temp_registered.nii.gz")
+
+    if os.path.exists(registered_path):
+        print(f"  ⏭️  Already registered — loading from disk.")
+        warped = ants.image_read(registered_path)
+        registered_imgs.append(warped)
+        continue
 
     moving_img = load_vol(fish)
     plt.close("all")

@@ -7,15 +7,24 @@
 # Usage:
 #     bash registration/submit_mean_brain.sh
 
-mkdir -p logs/registration
+# Bootstrap: use system python3 to read PYTHON_BIN from config
+PYTHON=$(python3 -c "
+import sys
+sys.path.insert(0, 'registration/config')
+from config_registration import PYTHON_BIN
+print(PYTHON_BIN)
+")
+
+LOG_DIR="logs/registration"
+mkdir -p "$LOG_DIR"
 
 sbatch \
     --job-name=mean_brain \
     --cpus-per-task=16 \
     --mem=128G \
-    --output=logs/registration/mean_brain.log \
-    --wrap="python registration/run_registration_mean_brain_batch.py"
+    --output="$LOG_DIR/mean_brain.log" \
+    --wrap="$PYTHON registration/run_registration_mean_brain_batch.py"
 
 echo "Mean brain job submitted."
 echo "Monitor: squeue -u \$USER"
-echo "Log:     logs/registration/mean_brain.log"
+echo "Log:     $LOG_DIR/mean_brain.log"
