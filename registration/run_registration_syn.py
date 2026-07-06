@@ -54,8 +54,10 @@ os.makedirs(os.environ["TMPDIR"], exist_ok=True)
 
 import ants
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from registration.registration import (
+sys.path.insert(0, str(Path(__file__).resolve().parent))    # for registration.py
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # for utils/
+
+from registration import (
     load_volume_mean,
     syn_registration,
 )

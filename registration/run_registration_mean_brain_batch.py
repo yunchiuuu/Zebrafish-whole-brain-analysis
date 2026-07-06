@@ -119,13 +119,19 @@ for i, fish in enumerate(fish_for_mean_brain):
 # ── Masked average → mean brain ───────────────────────────────────────────────
 
 print("\n=== Creating masked mean brain ===")
-registered_np = [
-    normalize_image_intensity(img.numpy())
-    for img in registered_imgs
-]
+
+# Resample all registered images to template grid before stacking
+registered_np = []
+for img in registered_imgs:
+    if img.shape != template_img.shape or not np.allclose(img.spacing, template_img.spacing):
+        print(f"  Resampling {img.shape} → {template_img.shape}")
+        img = ants.resample_image_to_target(img, template_img, interp_type="linear")
+    registered_np.append(normalize_image_intensity(img.numpy()))
+
 masks    = [(img > 0).astype(np.float32) for img in registered_np]
 sum_img  = np.sum(registered_np, axis=0)
 sum_mask = np.sum(masks, axis=0)
+
 mean_np  = np.divide(sum_img, sum_mask,
                      out=np.zeros_like(sum_img), where=sum_mask > 0)
 print(f"Mean brain shape: {mean_np.shape}")

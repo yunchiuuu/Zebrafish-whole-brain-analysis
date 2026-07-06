@@ -1,0 +1,114 @@
+✅ TMPDIR=/resnick/scratch/yun/tmp_ants | ITK threads=14
+Mean brain will be saved to: /resnick/groups/Proberlab/yun/lightsheet/analysis_output/registration/mean_brain_HCRT_TRPV1_YNT_ALL.nii.gz
+Total fish: 27
+
+Loading template: 251210_hcrt-trpv1_huc-h2b-g8m_csn_10uM_fish3
+Raw HDF5 shape (Z, X, Y): (40, 300, 564)
+Transposed shape (X, Y, Z): (300, 564, 40)
+Rotated shape (X, Y, Z): (300, 564, 40)
+ANTsImage (RAI)
+	 Pixel Type : float (float32)
+	 Components : 1
+	 Dimensions : (300, 564, 40)
+	 Spacing    : (1.52, 1.52, 6.25)
+	 Origin     : (0.0, 0.0, 0.0)
+	 Direction  : [1. 0. 0. 0. 1. 0. 0. 0. 1.]
+
+Template shape: (300, 564, 40), spacing: (1.52, 1.52, 6.25)
+
+=== Registering 27 fish to template ===
+
+[1/27] 251021_huc-h2b-g8m_csn_10uM_fish1
+  ⏭️  Already registered — loading from disk.
+
+[2/27] 251118_huc-h2b-g8m_csn_10uM_fish1
+  ⏭️  Already registered — loading from disk.
+
+[3/27] 251118_huc-h2b-g8m_csn_10uM_fish2
+  ⏭️  Already registered — loading from disk.
+
+[4/27] 251118_huc-h2b-g8m_csn_10uM_fish3
+  ⏭️  Already registered — loading from disk.
+
+[5/27] 251118_huc-h2b-g8m_csn_10uM_fish4
+  ⏭️  Already registered — loading from disk.
+
+[6/27] 251118_huc-h2b-g8m_csn_10uM_fish5
+  ⏭️  Already registered — loading from disk.
+
+[7/27] 251126_huc-h2b-g8m_csn_10uM_fish1
+  ⏭️  Already registered — loading from disk.
+
+[8/27] 251008_hcrt-trpv1_huc-h2b-g8m_csn_10uM_fish2
+  ⏭️  Already registered — loading from disk.
+
+[9/27] 251008_hcrt-trpv1_huc-h2b-g8m_csn_10uM_fish3
+  ⏭️  Already registered — loading from disk.
+
+[10/27] 251008_hcrt-trpv1_huc-h2b-g8m_csn_10uM_fish4
+  ⏭️  Already registered — loading from disk.
+
+[11/27] 251102_hcrt-trpv1_huc-h2b-g8m_csn_10uM_fish1
+  ⏭️  Already registered — loading from disk.
+
+[12/27] 251102_hcrt-trpv1_huc-h2b-g8m_csn_10uM_fish2
+  ⏭️  Already registered — loading from disk.
+
+[13/27] 251210_hcrt-trpv1_huc-h2b-g8m_csn_10uM_fish1
+  ⏭️  Already registered — loading from disk.
+
+[14/27] 251210_hcrt-trpv1_huc-h2b-g8m_csn_10uM_fish2
+  ⏭️  Already registered — loading from disk.
+
+[15/27] 251210_hcrt-trpv1_huc-h2b-g8m_csn_10uM_fish3
+  ⏭️  Already registered — loading from disk.
+
+[16/27] 260514_hcrt-trpv1_huc-h2b-g8m_csn_10uM_fish1
+  ⏭️  Already registered — loading from disk.
+
+[17/27] 260514_hcrt-trpv1_huc-h2b-g8m_csn_10uM_fish2
+  ⏭️  Already registered — loading from disk.
+
+[18/27] 260515_hcrt-trpv1_huc-h2b-g8m_csn_10uM_fish1
+  ⏭️  Already registered — loading from disk.
+
+[19/27] 260525_hcrt-trpv1_huc-h2b-g8m_inj_hcrt-h2b-g8m_csn_10uM_fish1
+  ⏭️  Already registered — loading from disk.
+
+[20/27] 260525_hcrt-trpv1_huc-h2b-g8m_inj_hcrt-h2b-g8m_csn_10uM_fish2
+  ⏭️  Already registered — loading from disk.
+
+[21/27] 260525_hcrt-trpv1_huc-h2b-g8m_inj_hcrt-h2b-g8m_csn_10uM_fish3
+  ⏭️  Already registered — loading from disk.
+
+[22/27] 260413_huc-h2b-g8m_ynt_10uM_fish1
+  ⏭️  Already registered — loading from disk.
+
+[23/27] 260413_huc-h2b-g8m_ynt_10uM_fish2
+  ⏭️  Already registered — loading from disk.
+
+[24/27] 260413_huc-h2b-g8m_ynt_10uM_fish3
+  ⏭️  Already registered — loading from disk.
+
+[25/27] 260413_huc-h2b-g8m_ynt_10uM_fish4
+  ⏭️  Already registered — loading from disk.
+
+[26/27] 260414_huc-h2b-g8m_ynt_10uM_fish1
+  ⏭️  Already registered — loading from disk.
+
+[27/27] 260414_huc-h2b-g8m_ynt_10uM_fish2
+  ⏭️  Already registered — loading from disk.
+
+=== Creating masked mean brain ===
+  Resampling (300, 552, 40) → (300, 564, 40)
+  Resampling (300, 552, 40) → (300, 564, 40)
+  Resampling (300, 552, 40) → (300, 564, 40)
+  Resampling (300, 552, 40) → (300, 564, 40)
+  Resampling (300, 552, 40) → (300, 564, 40)
+  Resampling (300, 552, 40) → (300, 564, 40)
+  Resampling (300, 552, 40) → (300, 564, 40)
+Mean brain shape: (300, 564, 40)
+
+✅ Mean brain saved: /resnick/groups/Proberlab/yun/lightsheet/analysis_output/registration/mean_brain_HCRT_TRPV1_YNT_ALL.nii.gz
+   Built from 27 fish.
+   Template: 251210_hcrt-trpv1_huc-h2b-g8m_csn_10uM_fish3 (index 14)

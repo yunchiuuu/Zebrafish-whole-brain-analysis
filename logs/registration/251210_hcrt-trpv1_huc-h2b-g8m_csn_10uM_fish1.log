@@ -1,0 +1,4 @@
+Traceback (most recent call last):
+  File "/resnick/home/ychiu/zwba/registration/run_registration_syn.py", line 64, in <module>
+    from utils.data_io import create_folder
+ImportError: cannot import name 'create_folder' from 'utils.data_io' (/resnick/home/ychiu/zwba/utils/data_io.py)
