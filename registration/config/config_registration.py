@@ -1,38 +1,28 @@
 """
-registration/config/config_registration.py
-==========================================
+registration/config_registration.py
+=====================================
 Shared registration config for ALL chemogenetic experiments.
 
 The mean brain is built ONCE from all fish across all experiment groups
-and used as a common reference for SyN registration.
-
-Design:
-    - Ctrl fish (huc-h2b-g8m_csn_120min) live under their own proj_ID
-      and are processed once. All comparison configs reference their
-      results without reprocessing.
-    - All fish — ctrl, expt, and YNT — share a single mean brain for
-      consistent cross-group registration.
-
-Submission commands (run from ~/zwba):
-    # Step 1 — build mean brain (run after interactive QC sets TEMPLATE_IDX)
-    bash registration/submit_mean_brain.sh
-
-    # Step 2 — register all fish to mean brain (run after Step 1 completes)
-    bash registration/submit_registration_syn.sh
-
-    # Monitor jobs
-    squeue -u $USER
-    tail -f logs/registration/mean_brain.log
-    grep -l "Error\|Traceback" logs/registration/*.log
+and used as a common reference for SyN registration. This config is
+experiment-agnostic — not tied to any single drug/condition.
 
 To add a new experiment batch:
     1. Add its fish tuples to the relevant list below
-    2. Update TEMPLATE_IDX if a better template fish is available
-    3. Re-run submit_mean_brain.sh to regenerate the mean brain
-    4. Re-run submit_registration_syn.sh for ALL fish (mean brain changed)
+    2. Re-run run_registration_mean_brain.py to regenerate the mean brain
+    3. Re-run run_registration_syn.py for ALL fish (mean brain changed)
+
+IMPORTANT — proj_ID change from old config
+------------------------------------------
+Ctrl fish previously lived under hcrt-trpv1_huc-h2b-g8m_csn_120min
+(old design: ctrl copied into expt folder). They now live under their
+own proj_ID: huc-h2b-g8m_csn_120min. If registration was already run
+for these fish, move or re-run their outputs before proceeding:
+    dir_registration / hcrt-trpv1_huc-h2b-g8m_csn_120min / <expt_ID> /
+    → dir_registration / huc-h2b-g8m_csn_120min / <expt_ID> /
 
 Location:
-    ~/zwba/registration/config/config_registration.py
+    ~/Zebrafish-whole-brain-analysis/registration/config_registration.py
 """
 
 from pathlib import Path
@@ -49,12 +39,14 @@ dir_registration = Path("/resnick/groups/Proberlab/yun/lightsheet/analysis_outpu
 # ============================================================
 # Renamed from mean_brain_HCRT_TRPV1_ALL.nii.gz to reflect that YNT
 # fish are now included. Rebuild required whenever fish are added.
-MEAN_BRAIN_FNAME = "mean_brain_HCRT_TRPV1_YNT_ALL.nii.gz"
-MEAN_BRAIN_PATH  = str(dir_registration / MEAN_BRAIN_FNAME)
+MEAN_BRAIN_FNAME  = "template_260514_hcrt-trpv1_csn_fish1.nii.gz"
+MEAN_BRAIN_PATH   = str(dir_registration / MEAN_BRAIN_FNAME)
 
-# Index into all_fish_for_mean_brain of the best-looking brain from QC.
-# Change this value when adding new fish or if the current template is poor.
-TEMPLATE_IDX = 14
+# Template fish used as fixed reference for all SyN registrations.
+# TEMPLATE_EXPT_ID is used by run_registration_syn.py to auto-generate
+# the template NIfTI if it doesn't exist on disk yet.
+TEMPLATE_IDX      = 15   # index into all_fish_for_mean_brain
+TEMPLATE_EXPT_ID  = "260514_hcrt-trpv1_huc-h2b-g8m_csn_10uM_fish1"
 
 # ============================================================
 # IMAGING SPECS
@@ -91,18 +83,20 @@ ctrl_fish_csn = [
 _EXPT_PROJ_CSN = "hcrt-trpv1_huc-h2b-g8m_csn_120min"
 
 expt_fish_csn = [
+    (_EXPT_PROJ_CSN, "251008_hcrt-trpv1_huc-h2b-g8m_csn_10uM_fish1"),
     (_EXPT_PROJ_CSN, "251008_hcrt-trpv1_huc-h2b-g8m_csn_10uM_fish2"),
     (_EXPT_PROJ_CSN, "251008_hcrt-trpv1_huc-h2b-g8m_csn_10uM_fish3"),
     (_EXPT_PROJ_CSN, "251008_hcrt-trpv1_huc-h2b-g8m_csn_10uM_fish4"),
     (_EXPT_PROJ_CSN, "251102_hcrt-trpv1_huc-h2b-g8m_csn_10uM_fish1"),
     (_EXPT_PROJ_CSN, "251102_hcrt-trpv1_huc-h2b-g8m_csn_10uM_fish2"),
+    (_EXPT_PROJ_CSN, "251126_huc-h2b-g8m_csn_10uM_fish2"),   # NOTE: name lacks hcrt-trpv1 — verify genotype
     (_EXPT_PROJ_CSN, "251210_hcrt-trpv1_huc-h2b-g8m_csn_10uM_fish1"),
     (_EXPT_PROJ_CSN, "251210_hcrt-trpv1_huc-h2b-g8m_csn_10uM_fish2"),
     (_EXPT_PROJ_CSN, "251210_hcrt-trpv1_huc-h2b-g8m_csn_10uM_fish3"),
     (_EXPT_PROJ_CSN, "260514_hcrt-trpv1_huc-h2b-g8m_csn_10uM_fish1"),
     (_EXPT_PROJ_CSN, "260514_hcrt-trpv1_huc-h2b-g8m_csn_10uM_fish2"),
     (_EXPT_PROJ_CSN, "260515_hcrt-trpv1_huc-h2b-g8m_csn_10uM_fish1"),
-]  # N = 11
+]  # N = 13
 
 # ── CSN 120min — EXPT with transient hcrt-h2b-g8m injection ─────────────────
 # Analyzed separately from main cohort (see hcrt_trpv1_csn_inj_vs_ctrl.py)
@@ -125,6 +119,7 @@ ynt_fish = [
     (_PROJ_YNT, "260413_huc-h2b-g8m_ynt_10uM_fish4"),
     (_PROJ_YNT, "260414_huc-h2b-g8m_ynt_10uM_fish1"),
     (_PROJ_YNT, "260414_huc-h2b-g8m_ynt_10uM_fish2"),
+    # (_PROJ_YNT, "260414_huc-h2b-g8m_ynt_10uM_fish3"),  # TODO: confirm exists on disk
 ]  # N = 6 confirmed; uncomment fish3 once verified
 
 # --- Add future experiment groups below ---

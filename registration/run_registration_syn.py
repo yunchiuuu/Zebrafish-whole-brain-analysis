@@ -9,13 +9,13 @@ The mean brain path comes from config_registration.py.
 
 Usage (interactive):
     python registration/run_registration_syn.py \
-        --config registration/config_registration.py \
+        --config chemogenetic/config/hcrt_trpv1_csn_120min.py \
         --expt_ID 251008_hcrt-trpv1_huc-h2b-g8m_csn_10uM_fish4
 
 Usage (sbatch one fish):
     sbatch --cpus-per-task=16 --mem=64G --wrap="\
         python registration/run_registration_syn.py \
-        --config registration/config_registration.py \
+        --config chemogenetic/config/hcrt_trpv1_csn_120min.py \
         --expt_ID 251008_hcrt-trpv1_huc-h2b-g8m_csn_10uM_fish4"
 
 Outputs per fish under {dir_registration}/{proj_ID}/{expt_ID}/:
@@ -54,9 +54,7 @@ os.makedirs(os.environ["TMPDIR"], exist_ok=True)
 
 import ants
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))    # for registration.py
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # for utils/
-
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 from registration import (
     load_volume_mean,
     syn_registration,
@@ -112,12 +110,14 @@ rotation_k = cfg.rotation_k
 # LOAD REGISTRATION CONFIG
 # ============================================================
 
-sys.path.insert(0, str(Path(__file__).resolve().parent / "config"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 from config_registration import (
-    dir_voluseg,
+    dir_voluseg as _dir_voluseg,
     dir_registration,
     MEAN_BRAIN_PATH,
     target_spacing,
+    all_fish_for_mean_brain,
+    TEMPLATE_EXPT_ID,
 )
 
 # ============================================================
@@ -186,14 +186,20 @@ def save_qc_overlay(fixed_atlas, registered_path, out_dir, expt_ID, n_planes=10)
 # ============================================================
 
 if not os.path.exists(MEAN_BRAIN_PATH):
-    raise FileNotFoundError(
-        f"Mean brain not found: {MEAN_BRAIN_PATH}\n"
-        "Run run_registration_mean_brain.py first."
+    print(f"Template brain not found — generating from {TEMPLATE_EXPT_ID}...")
+    template_fish = next(
+        f for f in all_fish_for_mean_brain if f[1] == TEMPLATE_EXPT_ID
     )
+    template_img = load_volume_mean(
+        template_fish, _dir_voluseg, res_x, res_y, res_z, rotation_k
+    )
+    os.makedirs(str(dir_registration), exist_ok=True)
+    ants.image_write(template_img, MEAN_BRAIN_PATH)
+    print(f"  ✅ Template brain saved: {MEAN_BRAIN_PATH}")
 
-print(f"\nLoading mean brain: {MEAN_BRAIN_PATH}")
+print(f"\nLoading template brain: {MEAN_BRAIN_PATH}")
 fixed_atlas = ants.image_read(MEAN_BRAIN_PATH)
-print(f"Mean brain shape={fixed_atlas.shape}, spacing={fixed_atlas.spacing}")
+print(f"Template shape={fixed_atlas.shape}, spacing={fixed_atlas.spacing}")
 
 # ============================================================
 # SyN REGISTRATION
@@ -210,7 +216,7 @@ os.makedirs(out_dir, exist_ok=True)
 # Load moving image
 print("Loading volume mean (moving)...")
 mov = load_volume_mean(
-    (proj_ID, expt_ID), dir_voluseg, res_x, res_y, res_z, rotation_k
+    proj_ID, expt_ID, res_x, res_y, res_z, n_slices, binning=1, rot=rotation_k
 )
 
 # Reorient both to LPS

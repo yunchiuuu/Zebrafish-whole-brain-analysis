@@ -127,55 +127,24 @@ if RUN_QC:
         raise RuntimeError("No fish kept — aborting.")
 
 # %% ============================================================
-# CELL 4: Generate + save mean brain
+# CELL 4: Save template fish as registration reference
 # ============================================================
+# Instead of building a mean brain, we use a single high-quality fish
+# as the fixed reference for all SyN registrations. This avoids FOV
+# mismatch artifacts from averaging fish with different coverage.
 
-TEMPLATE_IDX = 14
-print(f"Template fish: {all_fish_for_mean_brain[TEMPLATE_IDX][1]}")
+TEMPLATE_EXPT_ID = "260514_hcrt-trpv1_huc-h2b-g8m_csn_10uM_fish1"
 
-# Clip template index to kept fish list
-template_idx  = min(TEMPLATE_IDX, len(fish_for_mean_brain) - 1)
-template_fish = fish_for_mean_brain[template_idx]
-print(f"\nLoading initial template: {template_fish[1]}")
+template_fish = next(
+    f for f in all_fish_for_mean_brain if f[1] == TEMPLATE_EXPT_ID
+)
+print(f"Template fish: {template_fish[1]}")
+
 template_img = load_vol(template_fish)
 print(f"Template shape: {template_img.shape}, spacing: {template_img.spacing}")
 
-# Register all fish to template
-print(f"\n=== Registering {len(fish_for_mean_brain)} fish to template ===")
-registered_imgs = []
-
-for fish in fish_for_mean_brain:
-    proj_ID, expt_ID = fish
-    print(f"\n  {expt_ID}")
-    save_dir = os.path.join(dir_registration, proj_ID, expt_ID)
-    os.makedirs(save_dir, exist_ok=True)
-
-    moving_img = load_vol(fish)
-    warped = register_to_template(
-        moving_img, template_img, target_spacing=None, save_dir=save_dir
-    )
-    registered_imgs.append(warped)
-    print(f"  ✅ Done")
-
-# Masked average → mean brain
-print("\n=== Creating masked mean brain ===")
-registered_np = [
-    normalize_image_intensity(img.numpy())
-    for img in registered_imgs
-]
-masks    = [(img > 0).astype(np.float32) for img in registered_np]
-sum_img  = np.sum(registered_np, axis=0)
-sum_mask = np.sum(masks, axis=0)
-mean_np  = np.divide(sum_img, sum_mask,
-                     out=np.zeros_like(sum_img), where=sum_mask > 0)
-print(f"Mean brain shape: {mean_np.shape}")
-
-mean_ants = ants.from_numpy(mean_np)
-mean_ants.set_spacing(registered_imgs[0].spacing)
-
-os.makedirs(os.path.dirname(MEAN_BRAIN_PATH), exist_ok=True)
-ants.image_write(mean_ants, MEAN_BRAIN_PATH)
-print(f"\n✅ Mean brain saved: {MEAN_BRAIN_PATH}")
-print(f"   Built from {len(fish_for_mean_brain)} fish.")
+os.makedirs(str(dir_registration), exist_ok=True)
+ants.image_write(template_img, MEAN_BRAIN_PATH)
+print(f"\n✅ Template brain saved: {MEAN_BRAIN_PATH}")
 
 # %%
