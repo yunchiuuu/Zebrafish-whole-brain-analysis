@@ -112,7 +112,7 @@ rotation_k = cfg.rotation_k
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "config"))
 from config_registration import (
-    dir_voluseg as _dir_voluseg,
+    dir_voluseg,
     dir_registration,
     MEAN_BRAIN_PATH,
     target_spacing,
@@ -216,7 +216,7 @@ os.makedirs(out_dir, exist_ok=True)
 # Load moving image
 print("Loading volume mean (moving)...")
 mov = load_volume_mean(
-    proj_ID, expt_ID, res_x, res_y, res_z, n_slices, binning=1, rot=rotation_k
+    (proj_ID, expt_ID), dir_voluseg, res_x, res_y, res_z, rotation_k
 )
 
 # Reorient both to LPS

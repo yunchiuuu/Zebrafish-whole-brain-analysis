@@ -43,7 +43,7 @@ MEAN_BRAIN_FNAME  = "template_260514_hcrt-trpv1_csn_fish1.nii.gz"
 MEAN_BRAIN_PATH   = str(dir_registration / MEAN_BRAIN_FNAME)
 
 # Template fish used as fixed reference for all SyN registrations.
-# TEMPLATE_EXPT_ID is used by run_registration_syn.py to auto-generate
+# TEMPLATE_EXPT_ID is used by run_registration_syn.py to auto-gitgenerate
 # the template NIfTI if it doesn't exist on disk yet.
 TEMPLATE_IDX      = 15   # index into all_fish_for_mean_brain
 TEMPLATE_EXPT_ID  = "260514_hcrt-trpv1_huc-h2b-g8m_csn_10uM_fish1"
@@ -83,20 +83,18 @@ ctrl_fish_csn = [
 _EXPT_PROJ_CSN = "hcrt-trpv1_huc-h2b-g8m_csn_120min"
 
 expt_fish_csn = [
-    (_EXPT_PROJ_CSN, "251008_hcrt-trpv1_huc-h2b-g8m_csn_10uM_fish1"),
     (_EXPT_PROJ_CSN, "251008_hcrt-trpv1_huc-h2b-g8m_csn_10uM_fish2"),
     (_EXPT_PROJ_CSN, "251008_hcrt-trpv1_huc-h2b-g8m_csn_10uM_fish3"),
     (_EXPT_PROJ_CSN, "251008_hcrt-trpv1_huc-h2b-g8m_csn_10uM_fish4"),
     (_EXPT_PROJ_CSN, "251102_hcrt-trpv1_huc-h2b-g8m_csn_10uM_fish1"),
     (_EXPT_PROJ_CSN, "251102_hcrt-trpv1_huc-h2b-g8m_csn_10uM_fish2"),
-    (_EXPT_PROJ_CSN, "251126_huc-h2b-g8m_csn_10uM_fish2"),   # NOTE: name lacks hcrt-trpv1 — verify genotype
     (_EXPT_PROJ_CSN, "251210_hcrt-trpv1_huc-h2b-g8m_csn_10uM_fish1"),
     (_EXPT_PROJ_CSN, "251210_hcrt-trpv1_huc-h2b-g8m_csn_10uM_fish2"),
     (_EXPT_PROJ_CSN, "251210_hcrt-trpv1_huc-h2b-g8m_csn_10uM_fish3"),
     (_EXPT_PROJ_CSN, "260514_hcrt-trpv1_huc-h2b-g8m_csn_10uM_fish1"),
     (_EXPT_PROJ_CSN, "260514_hcrt-trpv1_huc-h2b-g8m_csn_10uM_fish2"),
     (_EXPT_PROJ_CSN, "260515_hcrt-trpv1_huc-h2b-g8m_csn_10uM_fish1"),
-]  # N = 13
+]  # N = 11
 
 # ── CSN 120min — EXPT with transient hcrt-h2b-g8m injection ─────────────────
 # Analyzed separately from main cohort (see hcrt_trpv1_csn_inj_vs_ctrl.py)
