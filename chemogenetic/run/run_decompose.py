@@ -24,7 +24,9 @@ Location:
     ~/Zebrafish-whole-brain-analysis/chemogenetic/run/run_decompose.py
 """
 
+import argparse
 import gc
+import importlib
 import sys
 from pathlib import Path
 
@@ -36,14 +38,26 @@ import numpy as np
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
 
-from chemogenetic.config.hcrt_trpv1_csn_120min import (
-    all_fish,
-    dir_analysis,
-    dir_voluseg,
-    f_tonic_percentile,
-    f_tonic_window_size,
-    sampling_rate_hz,
+# ---------------------------------------------------------------------------
+# Parse --config argument and load config dynamically
+# ---------------------------------------------------------------------------
+parser = argparse.ArgumentParser(
+    description="Compute F_tonic and F_phasic for all fish in a config."
 )
+parser.add_argument(
+    "--config", required=True,
+    help="Config module name under chemogenetic/config/, e.g. config_hcrt_trpv1_csn_120min"
+)
+args = parser.parse_args()
+
+cfg = importlib.import_module(f"chemogenetic.config.{args.config}")
+
+all_fish            = cfg.all_fish
+dir_analysis        = cfg.dir_analysis
+dir_voluseg         = cfg.dir_voluseg
+f_tonic_percentile  = cfg.f_tonic_percentile
+f_tonic_window_size = cfg.f_tonic_window_size
+sampling_rate_hz    = cfg.sampling_rate_hz
 from utils.data_io import fish_dir, read_data
 from utils.preprocess import (
     compute_f_tonic,
@@ -89,8 +103,8 @@ def main():
         fish_out = fish_dir(dir_analysis, fish)
         fish_out.mkdir(parents=True, exist_ok=True)
 
-        tonic_path   = fish_out / "data_array_f_tonic.npy"
-        phasic_path  = fish_out / "data_array_f_phasic.npy"
+        tonic_path   = fish_out / "f_tonic.npy"
+        phasic_path  = fish_out / "f_phasic.npy"
         bg_path      = fish_out / "f_dark_scalar.npy"
 
         try:

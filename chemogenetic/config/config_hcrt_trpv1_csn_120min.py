@@ -23,6 +23,7 @@ dir_registration = "/resnick/groups/Proberlab/yun/lightsheet/analysis_output/reg
 # Tree 3: analysis products (F_tonic, GLM, d', figures). Pipeline WRITES here.
 dir_analysis = "/resnick/groups/Proberlab/yun/lightsheet/analysis_output/chemogenetic/"
 
+PYTHON_BIN = "/resnick/home/ychiu/miniconda3/envs/voluseg/bin/python"
 
 # ============================================================
 # PROJECT FOLDERS
@@ -42,17 +43,19 @@ ctrl_fish = [
     (CTRL_PROJ, "251118_huc-h2b-g8m_csn_10uM_fish4"),
     (CTRL_PROJ, "251118_huc-h2b-g8m_csn_10uM_fish5"),
     (CTRL_PROJ, "251126_huc-h2b-g8m_csn_10uM_fish1"),
-]
+]   # N = 7 
 
 expt_fish = [
     (EXPT_PROJ, "251008_hcrt-trpv1_huc-h2b-g8m_csn_10uM_fish4"),
+    (EXPT_PROJ, "251102_hcrt-trpv1_huc-h2b-g8m_csn_10uM_fish1"),
     (EXPT_PROJ, "251102_hcrt-trpv1_huc-h2b-g8m_csn_10uM_fish2"),
     (EXPT_PROJ, "251210_hcrt-trpv1_huc-h2b-g8m_csn_10uM_fish1"),
     (EXPT_PROJ, "251210_hcrt-trpv1_huc-h2b-g8m_csn_10uM_fish2"),
     (EXPT_PROJ, "251210_hcrt-trpv1_huc-h2b-g8m_csn_10uM_fish3"),
-    (EXPT_PROJ, "260113_hcrt-trpv1_huc-h2b-g8m_csn_5uM_fish1"),   # NOTE: 5 uM
-    (EXPT_PROJ, "260113_hcrt-trpv1_huc-h2b-g8m_csn_5uM_fish2"),   # NOTE: 5 uM
-]
+    (EXPT_PROJ, "260514_hcrt-trpv1_huc-h2b-g8m_csn_10uM_fish1"),
+    (EXPT_PROJ, "260514_hcrt-trpv1_huc-h2b-g8m_csn_10uM_fish2"),
+    (EXPT_PROJ, "260515_hcrt-trpv1_huc-h2b-g8m_csn_10uM_fish1"),
+]   # N = 9
 
 all_fish = ctrl_fish + expt_fish
 
@@ -80,28 +83,16 @@ drug_uM = 10.0
 V_ml = 15.0
 Q_ml_min = 4.5
 
-# CAVEAT: the two 260113 fish were run at 5 uM, not 10 uM.
-# The capsaicin regressor C(t) scales with drug_uM, so is mis-scaled
-# for those fish with the global value above.
-# Per-fish lookup for run codes that need it:
-drug_uM_per_fish = {
-    (EXPT_PROJ, "251008_hcrt-trpv1_huc-h2b-g8m_csn_10uM_fish4"): 10.0,
-    (EXPT_PROJ, "251102_hcrt-trpv1_huc-h2b-g8m_csn_10uM_fish2"): 10.0,
-    (EXPT_PROJ, "251210_hcrt-trpv1_huc-h2b-g8m_csn_10uM_fish1"): 10.0,
-    (EXPT_PROJ, "251210_hcrt-trpv1_huc-h2b-g8m_csn_10uM_fish2"): 10.0,
-    (EXPT_PROJ, "251210_hcrt-trpv1_huc-h2b-g8m_csn_10uM_fish3"): 10.0,
-    (EXPT_PROJ, "260113_hcrt-trpv1_huc-h2b-g8m_csn_5uM_fish1"):  5.0,
-    (EXPT_PROJ, "260113_hcrt-trpv1_huc-h2b-g8m_csn_5uM_fish2"):  5.0,
-}
+# All fish use 10 µM capsaicin — single global drug_uM applies to all.
 
 # Epoch windows in FRAMES (minutes * 60 * volume_per_sec)
 baseline_start = 0  * 60 * volume_per_sec
 baseline_end   = 45 * 60 * volume_per_sec
 
-drug_start = 46 * 60 * volume_per_sec
+drug_start = 45 * 60 * volume_per_sec
 drug_end   = 90 * 60 * volume_per_sec
 
-wash_start = 91  * 60 * volume_per_sec
+wash_start = 90  * 60 * volume_per_sec
 wash_end   = 120 * 60 * volume_per_sec
 
 
