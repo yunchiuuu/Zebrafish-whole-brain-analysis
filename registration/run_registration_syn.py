@@ -116,7 +116,6 @@ from config_registration import (
     dir_registration,
     MEAN_BRAIN_PATH,
     target_spacing,
-    all_fish_for_mean_brain,
     TEMPLATE_EXPT_ID,
 )
 
@@ -184,19 +183,6 @@ def save_qc_overlay(fixed_atlas, registered_path, out_dir, expt_ID, n_planes=10)
 # ============================================================
 # LOAD MEAN BRAIN
 # ============================================================
-
-if not os.path.exists(MEAN_BRAIN_PATH):
-    print(f"Template brain not found — generating from {TEMPLATE_EXPT_ID}...")
-    template_fish = next(
-        f for f in all_fish_for_mean_brain if f[1] == TEMPLATE_EXPT_ID
-    )
-    template_img = load_volume_mean(
-        template_fish, _dir_voluseg, res_x, res_y, res_z, rotation_k
-    )
-    os.makedirs(str(dir_registration), exist_ok=True)
-    ants.image_write(template_img, MEAN_BRAIN_PATH)
-    print(f"  ✅ Template brain saved: {MEAN_BRAIN_PATH}")
-
 print(f"\nLoading template brain: {MEAN_BRAIN_PATH}")
 fixed_atlas = ants.image_read(MEAN_BRAIN_PATH)
 print(f"Template shape={fixed_atlas.shape}, spacing={fixed_atlas.spacing}")

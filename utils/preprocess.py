@@ -351,3 +351,221 @@ def subtract_background(f_raw, f_dark, clip_min=0.0):
     if clip_min is not None:
         np.clip(f_corrected, clip_min, None, out=f_corrected)
     return f_corrected
+
+
+# ============================================================
+# MEDOID COMPUTATION  (matches notebook Step 6 exactly)
+# ============================================================
+
+def compute_medoids(cell_x: np.ndarray,
+                    cell_y: np.ndarray,
+                    cell_z: np.ndarray) -> np.ndarray:
+    """
+    Compute per-cell true medoid in raw voluseg voxel space.
+
+    The medoid is the pixel within each cell that minimises the SUM OF
+    DISTANCES to all other pixels in that cell (via pairwise cdist).
+    This is the true L1-medoid, not the closest-to-centroid approximation.
+
+    Parameters
+    ----------
+    cell_x, cell_y, cell_z : np.ndarray, shape (n_cells, max_pixels_per_cell)
+        Per-cell pixel coordinate arrays from voluseg (via read_data).
+        Uses -1 as sentinel for empty/padding entries.
+        All three coordinate arrays are masked jointly:
+            valid = (x >= 0) & (y >= 0) & (z >= 0)
+
+    Returns
+    -------
+    medoids : np.ndarray, shape (n_cells, 3), dtype int
+        Per-cell medoid as [x, y, z] in voluseg voxel convention.
+        Rows with no valid pixels are set to [-1, -1, -1].
+
+    Notes
+    -----
+    For h2b nuclear labelling, cells have ~1–20 pixels each, so the
+    O(M²) pairwise distance per cell is fast enough in a Python loop.
+    """
+    from scipy.spatial.distance import cdist
+
+    N   = cell_x.shape[0]
+    medoids = np.full((N, 3), fill_value=-1, dtype=int)
+
+    for i in range(N):
+        # joint validity mask across all three coordinate arrays
+        valid = (cell_x[i] >= 0) & (cell_y[i] >= 0) & (cell_z[i] >= 0)
+        xs = cell_x[i][valid]
+        ys = cell_y[i][valid]
+        zs = cell_z[i][valid]
+
+        if xs.size == 0:
+            continue
+
+        pts = np.stack((xs, ys, zs), axis=1)          # (n_pix, 3)
+        D   = cdist(pts, pts, metric='euclidean')      # (n_pix, n_pix)
+        j   = np.argmin(D.sum(axis=1))                 # true medoid index
+        medoids[i] = pts[j].astype(int)
+
+    print(f"[compute_medoids] done — shape={medoids.shape}, "
+          f"valid={np.sum(~np.all(medoids == -1, axis=1)):,}/{N:,}")
+    return medoids
+
+
+def rotate_medoids(medoids_all: np.ndarray,
+                   vol_shape: tuple,
+                   rotation_k: int = 2) -> np.ndarray:
+    """
+    Apply 180° rotation in X–Y to align medoid coordinates with the
+    ANTs registration convention (rot90 k=2 applied during registration).
+
+    Parameters
+    ----------
+    medoids_all : np.ndarray, shape (n_cells, 3), dtype int
+        Raw medoids from compute_medoids(). Sentinel value = -1.
+    vol_shape : tuple
+        Shape of the reference volume as (X, Y, Z).
+        Use volume_mean_raw.shape from read_data() — typically (280, 544, 40).
+    rotation_k : int
+        Number of 90° counter-clockwise rotations. Default 2 (180°).
+
+    Returns
+    -------
+    medoids_rot : np.ndarray, shape (n_cells, 3), dtype int
+        Rotated medoids. Same sentinel convention (-1 for invalid cells).
+    """
+    medoids_rot = medoids_all.copy()
+    if rotation_k % 4 == 2:
+        valid = ~np.all(medoids_rot == -1, axis=1)
+        medoids_rot[valid, 0] = (vol_shape[0] - 1) - medoids_rot[valid, 0]
+        medoids_rot[valid, 1] = (vol_shape[1] - 1) - medoids_rot[valid, 1]
+        # z (axis=2) is unchanged
+    elif rotation_k % 4 != 0:
+        print(f"[rotate_medoids] ⚠️  rotation_k={rotation_k} not implemented "
+              f"→ returning unrotated copy")
+    return medoids_rot
+
+
+# ============================================================
+# MEDOID TRANSFORMATION TO TEMPLATE SPACE
+# ============================================================
+
+def transform_medoids_to_template(
+    medoids_rot:    np.ndarray,
+    transform_list: list,
+    template_img,
+    mov_ref,
+    res_x:          float = 1.52,
+    res_y:          float = 1.52,
+    res_z:          float = 6.25,
+) -> tuple:
+    """
+    Transform already-rotated medoid coordinates to template voxel space
+    via ANTs point transforms.
+
+    Coordinate pipeline (matches notebook Step 6 exactly):
+        medoids_rot [x, y, z] in (X, Y, Z) voluseg voxel space
+        → ants.transform_index_to_physical_point(mov_ref, (x, y, z))  → physical (µm)
+        → ants.apply_transforms_to_points([affine, warp])              → template physical
+        → ants.transform_physical_point_to_index(template_img, pt)    → template voxel
+
+    Parameters
+    ----------
+    medoids_rot : np.ndarray, shape (n_cells, 3), dtype int
+        Rotated medoids from rotate_medoids(). Sentinel = -1 (invalid cells).
+    transform_list : list of str
+        ANTs transforms in POINTS order: [affine.mat, warp.nii.gz].
+        Note: this is the REVERSE of the image transform list.
+        For images:  [SyN_Warp.nii.gz, SyN_GenericAffine.mat]
+        For points:  [SyN_GenericAffine.mat, SyN_Warp.nii.gz]  ← this arg
+        No whichtoinvert needed — transforms are stored in forward direction.
+    template_img : ants.ANTsImage
+        Template brain (fixed image used during registration).
+        Used for physical→voxel conversion in template space.
+    mov_ref : ants.ANTsImage
+        Reference ANTs image for the moving (fish) volume with correct spacing.
+        Used for voxel→physical conversion of medoid coordinates.
+        Build from volume_mean_raw: ants.from_numpy(volume_mean_raw, spacing=(res_x, res_y, res_z))
+    res_x, res_y, res_z : float
+        Voxel size (µm) of the original pre-resample fish volume.
+        Only used as a fallback if mov_ref is None.
+
+    Returns
+    -------
+    transformed_all : np.ndarray, shape (n_cells, 3), dtype float32
+        Template voxel coordinates [i, j, k] for each cell.
+        NaN where input was invalid (-1) or mapped out-of-bounds in template.
+    """
+    import ants
+    import pandas as pd
+
+    n_cells = medoids_rot.shape[0]
+    transformed_all = np.full((n_cells, 3), np.nan, dtype=np.float32)
+
+    # valid: not all -1
+    valid  = ~np.any(medoids_rot == -1, axis=1)
+    ijk    = np.round(medoids_rot).astype(np.int32)
+    vol_shape = mov_ref.shape   # (X, Y, Z)
+
+    # also bounds-check against moving volume
+    in_mov = (
+        (ijk[:, 0] >= 0) & (ijk[:, 0] < vol_shape[0]) &
+        (ijk[:, 1] >= 0) & (ijk[:, 1] < vol_shape[1]) &
+        (ijk[:, 2] >= 0) & (ijk[:, 2] < vol_shape[2])
+    )
+
+    use     = valid & in_mov
+    use_idx = np.where(use)[0]
+    print(f"[transform_medoids] valid={valid.sum():,}  in_mov={in_mov.sum():,}  "
+          f"to_transform={use.sum():,}/{n_cells:,}")
+
+    if use_idx.size == 0:
+        print("[transform_medoids] ⚠️  No cells to transform.")
+        return transformed_all
+
+    # Step 1: voxel → physical using ANTs index-to-physical (respects spacing + origin)
+    phys_pts = np.array([
+        ants.transform_index_to_physical_point(mov_ref, (int(ijk[idx, 0]),
+                                                          int(ijk[idx, 1]),
+                                                          int(ijk[idx, 2])))
+        for idx in use_idx
+    ], dtype=np.float32)
+
+    # Step 2: apply ANTs point transforms — fish physical → template physical
+    # transform_list for POINTS = [affine, warp] (forward application order)
+    # No whichtoinvert needed; transforms are stored fish→template forward.
+    warped_df = ants.apply_transforms_to_points(
+        dim          = 3,
+        points       = pd.DataFrame(phys_pts, columns=["x", "y", "z"]),
+        transformlist= transform_list,
+    )
+    warped_pts = warped_df[["x", "y", "z"]].to_numpy().astype(np.float32)
+
+    # Step 3: template physical → template voxel index
+    atlas_shape = np.array(template_img.shape)
+    atlas_ijk = []
+    for pt in warped_pts:
+        try:
+            idx_pt = ants.transform_physical_point_to_index(
+                template_img, (float(pt[0]), float(pt[1]), float(pt[2]))
+            )
+            atlas_ijk.append(idx_pt)
+        except Exception:
+            atlas_ijk.append((np.nan, np.nan, np.nan))
+    atlas_ijk = np.array(atlas_ijk, dtype=np.float32)
+
+    # bounds check in template
+    atlas_ijk_round = np.round(atlas_ijk).astype(np.float32)
+    atlas_in = (
+        np.isfinite(atlas_ijk_round[:, 0]) &
+        (atlas_ijk_round[:, 0] >= 0) & (atlas_ijk_round[:, 0] < atlas_shape[0]) &
+        (atlas_ijk_round[:, 1] >= 0) & (atlas_ijk_round[:, 1] < atlas_shape[1]) &
+        (atlas_ijk_round[:, 2] >= 0) & (atlas_ijk_round[:, 2] < atlas_shape[2])
+    )
+
+    # write back into full-length aligned array
+    good_src = use_idx[atlas_in]
+    transformed_all[good_src] = atlas_ijk_round[atlas_in]
+
+    print(f"[transform_medoids] ✅ {int(np.isfinite(transformed_all[:, 0]).sum()):,} "
+          f"cells successfully mapped to template space")
+    return transformed_all

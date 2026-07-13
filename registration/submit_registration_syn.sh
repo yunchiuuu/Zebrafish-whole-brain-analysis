@@ -10,8 +10,8 @@
 
 SCRIPT="registration/run_registration_syn.py"
 CONFIG="registration/config/config_registration.py"
-CPUS=16
-MEM="64G"
+CPUS=32
+MEM="256G"
 LOG_DIR="logs/registration"
 
 mkdir -p "$LOG_DIR"

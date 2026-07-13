@@ -81,7 +81,7 @@ rotation_k = 2                         # 180° rotation for mapzebrain alignment
 # ============================================================
 drug_uM = 10.0
 V_ml = 15.0
-Q_ml_min = 4.5
+Q_ml_min = 4
 
 # All fish use 10 µM capsaicin — single global drug_uM applies to all.
 
