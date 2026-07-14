@@ -1,5 +1,5 @@
 """
-config_csn_inj_120min.py
+config_hcrt_trpv1_inj_csn_120min.py
 ========================
 Config for the hcrt-trpv1_huc-h2b-g8m + injected hcrt-h2b-g8m
 capsaicin 120-min experiment.
@@ -18,7 +18,7 @@ Purpose:
     they are functionally HCRT-TRPV1 expt fish.
 
 Location:
-    ~/zwba/chemogenetic/config/config_csn_inj_120min.py
+    ~/zwba/chemogenetic/config/config_hcrt_trpv1_inj_csn_120min.py
 """
 
 # ============================================================
@@ -43,6 +43,21 @@ expt_fish_csn_inj = [
     (INJ_PROJ, "260525_hcrt-trpv1_huc-h2b-g8m_inj_hcrt-h2b-g8m_csn_10uM_fish2"),
     (INJ_PROJ, "260525_hcrt-trpv1_huc-h2b-g8m_inj_hcrt-h2b-g8m_csn_10uM_fish3"),
 ]  # N = 3  — regressor derivation cohort
+
+# alias expected by run_temporal_intensity_map.py
+expt_fish = expt_fish_csn_inj
+
+# ctrl group — same huc-h2b-g8m fish used across all CSN comparisons
+CTRL_PROJ = "huc-h2b-g8m_csn_120min"
+ctrl_fish = [
+    (CTRL_PROJ, "251021_huc-h2b-g8m_csn_10uM_fish1"),
+    (CTRL_PROJ, "251118_huc-h2b-g8m_csn_10uM_fish1"),
+    (CTRL_PROJ, "251118_huc-h2b-g8m_csn_10uM_fish2"),
+    (CTRL_PROJ, "251118_huc-h2b-g8m_csn_10uM_fish3"),
+    (CTRL_PROJ, "251118_huc-h2b-g8m_csn_10uM_fish4"),
+    (CTRL_PROJ, "251118_huc-h2b-g8m_csn_10uM_fish5"),
+    (CTRL_PROJ, "251126_huc-h2b-g8m_csn_10uM_fish1"),
+]  # N = 7
 
 all_fish = expt_fish_csn_inj
 
@@ -122,7 +137,7 @@ param_folder_name = (
 # ============================================================
 # Same tags as main expt config — these are HCRT-TRPV1 fish.
 # Ctrl group (ctrl_fish_csn) lives in config_hcrt_trpv1_csn_120min.
-EXPT_TAG = "HCRT-TRPV1"
+EXPT_TAG = "HCRT-TRPV1-INJ"
 CTRL_TAG = "CTRL"
 
 PLOT_META = {
@@ -141,7 +156,7 @@ def get_group_meta(fish):
 # ============================================================
 # COMPARISON TAG + FIGURE PATH
 # ============================================================
-COMPARISON_TAG = f"{EXPT_TAG}_vs_{CTRL_TAG}_inj"   # "HCRT-TRPV1_vs_CTRL_inj"
+COMPARISON_TAG = f"{EXPT_TAG}_vs_{CTRL_TAG}"   # "HCRT-TRPV1-INJ_vs_CTRL"
 
 
 def comparison_fig_dir(dir_analysis, comparison_tag=None):

@@ -32,7 +32,7 @@ from pathlib import Path
 # ============================================================
 PYTHON_BIN       = "/resnick/home/ychiu/miniconda3/envs/voluseg/bin/python"
 dir_voluseg      = Path("/resnick/groups/Proberlab/yun/lightsheet/")
-dir_registration = Path("/resnick/groups/Proberlab/yun/lightsheet/analysis_output/registration/300um_template/")
+dir_registration = Path("/resnick/groups/Proberlab/yun/lightsheet/analysis_output/registration/")
 
 # ============================================================
 # MEAN BRAIN

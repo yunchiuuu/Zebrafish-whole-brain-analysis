@@ -24,6 +24,8 @@ Location:
     ~/Zebrafish-whole-brain-analysis/chemogenetic/run/run_figures.py
 """
 
+import argparse
+import importlib
 import sys
 from pathlib import Path
 
@@ -32,27 +34,32 @@ import numpy as np
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
 
-from chemogenetic.config.hcrt_trpv1_csn_120min import (
-    all_fish,
-    COMPARISON_TAG,
-    comparison_fig_dir,
-    baseline_end,
-    baseline_start,
-    CLIP_ABS_DZ,
-    ctrl_fish,
-    CTRL_TAG,
-    dir_analysis,
-    drug_end,
-    drug_start,
-    expt_fish,
-    EXPT_TAG,
-    L_MIN,
-    NULL_TAG,
-    param_folder_name,
-    PLOT_META,
-    RESPONDER_NULL_THRESH,
-    sampling_rate_hz,
-)
+parser = argparse.ArgumentParser()
+parser.add_argument("--config", required=True,
+                    help="Config module under chemogenetic/config/")
+args, _ = parser.parse_known_args()
+
+cfg = importlib.import_module(f"chemogenetic.config.{args.config}")
+
+all_fish              = cfg.all_fish
+COMPARISON_TAG        = cfg.COMPARISON_TAG
+comparison_fig_dir    = cfg.comparison_fig_dir
+baseline_end          = cfg.baseline_end
+baseline_start        = cfg.baseline_start
+CLIP_ABS_DZ           = cfg.CLIP_ABS_DZ
+ctrl_fish             = cfg.ctrl_fish
+CTRL_TAG              = cfg.CTRL_TAG
+dir_analysis          = cfg.dir_analysis
+drug_end              = cfg.drug_end
+drug_start            = cfg.drug_start
+expt_fish             = cfg.expt_fish
+EXPT_TAG              = cfg.EXPT_TAG
+L_MIN                 = cfg.L_MIN
+NULL_TAG              = cfg.NULL_TAG
+param_folder_name     = cfg.param_folder_name
+PLOT_META             = cfg.PLOT_META
+RESPONDER_NULL_THRESH = cfg.RESPONDER_NULL_THRESH
+sampling_rate_hz      = cfg.sampling_rate_hz
 from chemogenetic.responders_effectsize import (
     frames_to_min_pair,
     _dz_output_paths,
@@ -60,14 +67,13 @@ from chemogenetic.responders_effectsize import (
 )
 from utils.data_io import fish_dir
 
-from chemogenetic.visualization.traces     import plot_tonic_phasic_zscore
-from chemogenetic.visualization.population import (
+from chemogenetic.population import (
     plot_responder_fractions,
     plot_dz_boxplot,
     plot_plateau_dz_boxplot,
     plot_dprime_boxplot,
 )
-from chemogenetic.visualization.scatter import plot_tonic_phasic_scatter
+from chemogenetic.scatter import plot_tonic_phasic_scatter
 
 # ============================================================
 # STAGE TOGGLES
@@ -97,8 +103,113 @@ FIG_DIR = comparison_fig_dir(dir_analysis, COMPARISON_TAG)
 
 
 # ============================================================
-# LOADERS
+# STAGE A: RESPONDER vs NON-RESPONDER MEAN TRACES
 # ============================================================
+
+BL_START_VOL = 1200   # vol 20 min — skip habituation transient
+
+def _plot_responder_mean_traces(fish, group_tag, fig_dir, save=True, show=False):
+    """
+    Plot mean z-scored F_tonic and F_phasic traces split by GLM responder category:
+        - Positive responders (activated by HCRT)   — red
+        - Negative responders (suppressed by HCRT)  — blue
+        - Non-responders                             — gray
+
+    Z-score per cell uses baseline vols BL_START_VOL:baseline_end.
+    Saves one PNG per fish.
+    """
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    proj_ID, expt_ID = fish
+    base_dir = fish_dir(dir_analysis, fish)
+
+    ft_path = base_dir / "f_tonic.npy"
+    fp_path = base_dir / "f_phasic.npy"
+    if not ft_path.exists() or not fp_path.exists():
+        print(f"  ⚠️  {expt_ID}: f_tonic/f_phasic missing — skipping trace plot")
+        return
+
+    try:
+        pos_idx, neg_idx, _, _ = _load_responder_idx(
+            base_dir, NULL_TAG, RESPONDER_NULL_THRESH,
+        )
+    except FileNotFoundError:
+        print(f"  ⚠️  {expt_ID}: responder idx missing — skipping trace plot")
+        return
+
+    Ft = np.load(str(ft_path), mmap_mode="r").astype(np.float32)
+    Fp = np.load(str(fp_path), mmap_mode="r").astype(np.float32)
+    n_cells, T = Ft.shape
+    t_min = np.arange(T) / (60 * sampling_rate_hz)
+
+    # non-responders = all cells minus pos and neg
+    resp_all = np.union1d(pos_idx, neg_idx)
+    all_idx  = np.arange(n_cells)
+    non_idx  = np.setdiff1d(all_idx, resp_all)
+
+    def _zscore_group(arr, idx):
+        """Z-score each cell on baseline then take mean ± SEM."""
+        if idx.size == 0:
+            return None, None
+        sub = arr[idx]
+        mu  = sub[:, BL_START_VOL:int(baseline_end)].mean(axis=1, keepdims=True)
+        sg  = sub[:, BL_START_VOL:int(baseline_end)].std(axis=1, keepdims=True).clip(1e-6)
+        z   = (sub - mu) / sg
+        mean = z.mean(axis=0)
+        sem  = z.std(axis=0) / np.sqrt(idx.size)
+        return mean, sem
+
+    groups = {
+        f"Pos responders (N={pos_idx.size:,})": (pos_idx,  "#c0392b"),
+        f"Neg responders (N={neg_idx.size:,})": (neg_idx,  "#2980b9"),
+        f"Non-responders  (N={non_idx.size:,})": (non_idx, "#7f8c8d"),
+    }
+
+    fig, axes = plt.subplots(1, 2, figsize=(16, 4), sharey=False)
+    fig.suptitle(f"{expt_ID}  [{group_tag}] — Responder mean traces",
+                 fontsize=11, fontweight="bold")
+
+    for ax, arr, ylabel, title in zip(
+        axes,
+        [Ft, Fp],
+        ["F_tonic (z-score)", "F_phasic (z-score)"],
+        ["F_tonic", "F_phasic"],
+    ):
+        for label, (idx, color) in groups.items():
+            mean, sem = _zscore_group(arr, idx)
+            if mean is None:
+                continue
+            ax.plot(t_min, mean, color=color, lw=1.2, label=label, zorder=5)
+            ax.fill_between(t_min, mean - sem, mean + sem,
+                            color=color, alpha=0.2, zorder=4)
+
+        ax.axvline(drug_start / (60 * sampling_rate_hz),
+                   color="tomato",    lw=1.0, ls="--", alpha=0.8, label="drug start")
+        ax.axvline(drug_end   / (60 * sampling_rate_hz),
+                   color="steelblue", lw=1.0, ls="--", alpha=0.8, label="drug end")
+        ax.axhline(0, color="k", lw=0.5, ls=":")
+        ax.set_xlim(0, t_min[-1])
+        ax.set_xlabel("Time (min)", fontsize=9)
+        ax.set_ylabel(ylabel, fontsize=9)
+        ax.set_title(title, fontsize=10)
+        ax.legend(fontsize=7, loc="upper left")
+        ax.spines[["top", "right"]].set_visible(False)
+
+    plt.tight_layout()
+
+    fish_fig_dir = base_dir / "figures"
+    fish_fig_dir.mkdir(parents=True, exist_ok=True)
+    out = fish_fig_dir / "responder_mean_traces.png"
+    if save:
+        fig.savefig(str(out), dpi=150, bbox_inches="tight")
+        print(f"  ✅ {expt_ID} → {out.name}")
+    if show:
+        plt.show()
+    plt.close(fig)
+
+    del Ft, Fp
 
 def _load_responder_fractions(fish_list):
     """Return (pos_fracs, neg_fracs) as arrays of per-fish fractions."""
@@ -106,7 +217,7 @@ def _load_responder_fractions(fish_list):
     for fish in fish_list:
         proj_ID, expt_ID = fish
         base_dir = fish_dir(dir_analysis, fish)
-        Ft_path  = base_dir / "data_array_f_tonic.npy"
+        Ft_path  = base_dir / "f_tonic.npy"
         if not Ft_path.exists():
             continue
         Ft = np.load(str(Ft_path), mmap_mode="r")
@@ -195,19 +306,15 @@ def _load_dprime_by_sign(fish_list):
 def main():
     print(f"run_figures | null={NULL_TAG} p{RESPONDER_NULL_THRESH} | fig_dir={FIG_DIR}")
 
-    # ── A: Per-fish traces ────────────────────────────────────
+    # ── A: Responder vs non-responder mean traces ─────────────
     if RUN_TRACES:
-        print("\n── A: Per-fish tonic/phasic traces ─────────────────────")
-        for fish in all_fish:
-            plot_tonic_phasic_zscore(
-                fish=fish,
-                dir_analysis=dir_analysis,
-                drug_start=drug_start,
-                drug_end=drug_end,
-                drug_label="Drug",
-                save=SAVE_PLOTS,
-                show=SHOW_PLOTS,
-            )
+        print("\n── A: Responder vs non-responder mean traces ────────────")
+        for fish in ctrl_fish:
+            _plot_responder_mean_traces(fish, CTRL_TAG,
+                                        FIG_DIR, save=SAVE_PLOTS, show=SHOW_PLOTS)
+        for fish in expt_fish:
+            _plot_responder_mean_traces(fish, EXPT_TAG,
+                                        FIG_DIR, save=SAVE_PLOTS, show=SHOW_PLOTS)
 
     # ── B: Responder fractions ────────────────────────────────
     if RUN_FRACTIONS:

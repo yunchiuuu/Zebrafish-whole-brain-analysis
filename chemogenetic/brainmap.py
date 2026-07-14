@@ -124,150 +124,225 @@ def _rotate(arr):
     return np.rot90(arr, k=3) if ROTATE_XY_MINUS_90 else arr
 
 
+# ── HCRT dot schematic positions ──────────────────────────────────────────
+# 5 positions per side as (x_frac, y_frac) relative to (Xc, Yc) coarse grid.
+# Placed at approximate anterior hypothalamus location in dorsal portrait view.
+
 # ── main plotting function ─────────────────────────────────────────────────
 
 def plot_group_comparison(
-    ctrl_maps:      list,          # len = N_WINDOWS, each (Xc, Yc, Zc) or None
-    expt_maps:      list,          # len = N_WINDOWS, each (Xc, Yc, Zc) or None
-    window_labels:  list[str],
-    brain_shape:    tuple,         # full-res template (X, Y, Z)
-    DS:             tuple  = DEFAULT_DS,
-    ctrl_tag:       str    = "CTRL",
-    expt_tag:       str    = "EXPT",
-    metric_label:   str    = "Tonic ΔZ (window mean z) vs baseline",
-    title:          str    = "",
-    cmap:           str    = DEFAULT_CMAP,
-    vmin:           float  = DEFAULT_VMIN,
-    vmax:           float  = DEFAULT_VMAX,
-    proj_mode:      str    = DEFAULT_PROJ,
-    fig_dir:        Path | None = None,
-    filename:       str    = "temporal_intensity_map.png",
-    show:           bool   = False,
+    ctrl_maps:       list,
+    expt_maps:       list,
+    window_labels:   list[str],
+    brain_shape:     tuple,
+    DS:              tuple  = DEFAULT_DS,
+    ctrl_tag:        str    = "CTRL",
+    expt_tag:        str    = "EXPT",
+    diff_maps:       list | None = None,
+    diff_tag:        str    = "EXPT − CTRL",
+    metric_label:    str    = "Tonic ΔZ",
+    title:           str    = "",
+    cmap:            str    = DEFAULT_CMAP,
+    vmin:            float  = DEFAULT_VMIN,
+    vmax:            float  = DEFAULT_VMAX,
+    proj_mode:       str    = DEFAULT_PROJ,
+    # ── HCRT reference trace row ──────────────────────────────────────────
+    hcrt_df                  = None,
+    hcrt_trace_col:  str     = "hcrt_mean_z",
+    hcrt_sem_col:    str     = "hcrt_sem_z",
+    hcrt_fish_cols:  list    = None,
+    hcrt_trace_label: str    = "Hcrt F_tonic",
+    hcrt_window_vols: list   = None,
+    hcrt_sampling_hz: float  = 1.0,
+    # ─────────────────────────────────────────────────────────────────────
+    fig_dir:         Path | None = None,
+    filename:        str   = "temporal_intensity_map.png",
+    show:            bool  = False,
 ) -> plt.Figure:
     """
-    Plot temporal intensity maps in the notebook style:
-        - 2 rows per window: top = XY projection (dorsal), bottom = YZ projection (lateral)
-        - 2 columns: CTRL (left) vs EXPT (right)
-        - Window labels as rotated text on the left spine
-        - GridSpec with height_ratios proportional to coarse-grid dimensions
-
-    Parameters
-    ----------
-    ctrl_maps, expt_maps : list of np.ndarray or None
-        Per-window coarse-grid volumes from voxelize step.
-        None for windows with no data.
-    window_labels : list of str
-        Label per window, e.g. ["0–15 min", "10–25 min", ...].
-    brain_shape : tuple (X, Y, Z)
-        Full-resolution template brain dimensions (used for axis sizing).
-    DS : tuple (dx, dy, dz)
-        Downsampling factors (same as used in voxelization).
+    Temporal intensity map layout:
+        Row 0 (opt): HCRT F_tonic or F_phasic trace spanning all columns
+        Row 1+: CTRL | EXPT | EXPT-CTRL brain maps
+        Cols: [XY portrait | YZ portrait-thin | GAP] per time window
     """
-    n_windows = len(window_labels)
-    titles    = [ctrl_tag, expt_tag]
-    maps_list = [ctrl_maps, expt_maps]
-    n_cols    = 2
+    from matplotlib.gridspec import GridSpec
+    from matplotlib.colors import TwoSlopeNorm
+
+    n_windows  = len(window_labels)
+    group_tags = [ctrl_tag, expt_tag]
+    group_maps = [ctrl_maps, expt_maps]
+    if diff_maps is not None:
+        group_tags.append(diff_tag)
+        group_maps.append(diff_maps)
+    n_groups = len(group_tags)
+
+    has_hcrt = hcrt_df is not None
+    n_rows   = (1 if has_hcrt else 0) + n_groups
 
     Xc, Yc, Zc = _coarse_shape(brain_shape, DS)
 
-    # height_ratios: alternate Xc (XY row) and Zc (YZ row) for each window
-    height_ratios = []
-    for _ in range(n_windows):
-        height_ratios.extend([Xc, Zc])
+    # columns: [XY, YZ, GAP] per window; last window has no GAP
+    GAP_W      = max(1, int(Xc * 0.08))
+    col_widths = []
+    col_types  = []
+    for wi in range(n_windows):
+        col_widths.extend([Xc, Zc])
+        col_types.extend(["xy", "yz"])
+        if wi < n_windows - 1:
+            col_widths.append(GAP_W)
+            col_types.append("gap")
+    n_cols = len(col_widths)
 
-    fig = plt.figure(figsize=(5 * n_cols, 2.0 * n_windows))
-    gs  = GridSpec(
-        nrows         = 2 * n_windows,
-        ncols         = n_cols,
-        height_ratios = height_ratios,
-        hspace        = 0.1,
-        wspace        = 0.05,
-        top           = 0.88,
-        bottom        = 0.05,
+    xy_cols = [i for i, t in enumerate(col_types) if t == "xy"]
+    yz_cols = [i for i, t in enumerate(col_types) if t == "yz"]
+
+    # row heights
+    hcrt_h   = Yc * 0.45
+    brain_h  = Yc
+    h_ratios = ([hcrt_h] if has_hcrt else []) + [brain_h] * n_groups
+
+    scale = 2.0 / Xc
+    fig_w = scale * sum(col_widths) + 1.6
+    fig_h = scale * sum(h_ratios) + 1.0
+    fig   = plt.figure(figsize=(fig_w, fig_h))
+
+    gs = GridSpec(
+        n_rows, n_cols,
+        height_ratios = h_ratios,
+        width_ratios  = col_widths,
+        hspace        = 0.08,
+        wspace        = 0.02,
+        top           = 0.90,
+        bottom        = 0.07,
+        left          = 0.12,
+        right         = 0.88,
     )
 
-    axs = np.empty((2 * n_windows, n_cols), dtype=object)
-    for r in range(2 * n_windows):
-        for c in range(n_cols):
-            axs[r, c] = fig.add_subplot(gs[r, c])
-
+    norm    = TwoSlopeNorm(vmin=vmin, vcenter=0.0, vmax=vmax)
     last_im = None
 
-    for wi in range(n_windows):
-        row_xy = 2 * wi
-        row_yz = 2 * wi + 1
+    # ── HCRT trace row — single axis spanning all columns ─────────────────
+    if has_hcrt:
+        ax_hcrt = fig.add_subplot(gs[0, :])
 
-        for j, (key, maps) in enumerate(zip(titles, maps_list)):
-            vol = maps[wi]
+        t_min  = hcrt_df["time_min"].values
+        y_mean = hcrt_df[hcrt_trace_col].values
+        y_sem  = hcrt_df[hcrt_sem_col].values \
+                 if hcrt_sem_col in hcrt_df.columns else None
+        fish_cols = hcrt_fish_cols or [
+            c for c in hcrt_df.columns
+            if c.startswith("fish") and c.endswith("_z")
+        ]
+
+        # 45–120 min absolute = 0–75 min relative to drug onset
+        view_mask = (t_min >= 45) & (t_min <= 120)
+        t_rel     = t_min[view_mask] - 45
+
+        # shade temporal windows
+        win_colors = plt.cm.tab10(np.linspace(0, 0.65, n_windows))
+        if hcrt_window_vols is not None:
+            for wi, (vs, ve) in enumerate(hcrt_window_vols):
+                ts = vs / hcrt_sampling_hz / 60 - 45
+                te = ve / hcrt_sampling_hz / 60 - 45
+                ax_hcrt.axvspan(max(ts, 0), min(te, 75),
+                                alpha=0.12, color=win_colors[wi], zorder=0)
+
+        # washout start
+        ax_hcrt.axvline(45, color="steelblue", lw=1.0, ls="--",
+                        alpha=0.7, label="washout")
+
+        # individual fish traces
+        for fc in fish_cols:
+            if fc in hcrt_df.columns:
+                ax_hcrt.plot(t_rel, hcrt_df[fc].values[view_mask],
+                             color="gray", lw=0.7, alpha=0.35)
+
+        # mean ± SEM
+        ax_hcrt.plot(t_rel, y_mean[view_mask],
+                     color="black", lw=1.2, zorder=5)
+        if y_sem is not None:
+            ax_hcrt.fill_between(
+                t_rel,
+                (y_mean - y_sem)[view_mask],
+                (y_mean + y_sem)[view_mask],
+                color="black", alpha=0.15, zorder=4,
+            )
+
+        ax_hcrt.axhline(0, color="k", lw=0.5, ls=":")
+        ax_hcrt.set_xlim(0, 75)
+        ax_hcrt.set_xlabel("Time post drug onset (min)", fontsize=8)
+        ax_hcrt.tick_params(labelsize=7)
+        ax_hcrt.spines[["top", "right"]].set_visible(False)
+
+        # label on left — close to plot left edge
+        fig.text(gs[0, 0].get_position(fig).x0 - 0.01,
+                 gs[0, 0].get_position(fig).y0
+                 + gs[0, 0].get_position(fig).height / 2,
+                 hcrt_trace_label, va="center", ha="right",
+                 fontsize=9, fontweight="bold", rotation=90)
+
+    # ── brain map rows ────────────────────────────────────────────────────
+    brain_row_offset = 1 if has_hcrt else 0
+
+    for gi, (gtag, gmaps) in enumerate(zip(group_tags, group_maps)):
+        row = gi + brain_row_offset
+
+        for wi in range(n_windows):
+            vol   = gmaps[wi]
+            ax_xy = fig.add_subplot(gs[row, xy_cols[wi]])
+            ax_yz = fig.add_subplot(gs[row, yz_cols[wi]])
+
+            if gi == 0:
+                ax_xy.set_title(window_labels[wi], fontsize=9,
+                                pad=3, fontweight="bold")
 
             if vol is None:
-                axs[row_xy, j].axis("off")
-                axs[row_yz, j].axis("off")
+                ax_xy.axis("off")
+                ax_yz.axis("off")
                 continue
 
-            # ── XY: mean projection over Z (axis=2) ──────────────────────
+            # XY portrait: mean over Z → (Xc,Yc) → .T → (Yc,Xc)
             xy = _proj(vol, axis=2, mode=proj_mode)
-            if not np.isfinite(xy).any():
-                axs[row_xy, j].axis("off")
-            else:
-                xy      = _rotate(xy)
-                xy_disp = np.rot90(xy, k=4).T
-                axs[row_xy, j].imshow(
-                    xy_disp,
-                    cmap=cmap, vmin=vmin, vmax=vmax,
-                    origin="upper", aspect="equal", interpolation="nearest",
-                    extent=[0, Yc, Xc, 0],
+            if np.isfinite(xy).any():
+                last_im = ax_xy.imshow(
+                    xy.T, cmap=cmap, norm=norm,
+                    origin="upper", aspect="equal",
+                    interpolation="nearest",
                 )
-                axs[row_xy, j].axis("off")
-                axs[row_xy, j].set_xlim(0, Yc)
-                if wi == 0:
-                    axs[row_xy, j].set_title(key, fontsize=14, pad=10)
+            ax_xy.axis("off")
 
-            # ── YZ: mean projection over X (axis=0) ──────────────────────
+            # YZ portrait-thin: mean over X → (Yc,Zc)
             yz = _proj(vol, axis=0, mode=proj_mode)
-            if not np.isfinite(yz).any():
-                axs[row_yz, j].axis("off")
-            else:
-                yz      = yz.T
-                yz      = np.rot90(yz, k=3).T
-                yz_disp = np.flipud(yz)
-
-                last_im = axs[row_yz, j].imshow(
-                    yz_disp,
-                    cmap=cmap, vmin=vmin, vmax=vmax,
-                    origin="upper", aspect="equal", interpolation="nearest",
-                    extent=[0, Yc, Zc, 0],
+            if np.isfinite(yz).any():
+                last_im = ax_yz.imshow(
+                    yz, cmap=cmap, norm=norm,
+                    origin="upper", aspect="equal",
+                    interpolation="nearest",
                 )
-                axs[row_yz, j].axis("off")
-                axs[row_yz, j].invert_yaxis()
-                axs[row_yz, j].set_xlim(0, Yc)
+            ax_yz.axis("off")
 
-        # ── window label on left spine (between XY and YZ rows) ──────────
-        pos_top  = axs[row_xy, 0].get_position()
-        pos_bot  = axs[row_yz, 0].get_position()
-        y_center = (pos_top.y1 + pos_bot.y0) / 2
-
+        # group label — close to plot left edge
         fig.text(
-            0.02, y_center, window_labels[wi],
-            va="center", ha="right", rotation=90,
-            fontsize=12, fontweight="bold",
-            transform=fig.transFigure,
+            gs[row, 0].get_position(fig).x0 - 0.01,
+            gs[row, 0].get_position(fig).y0
+            + gs[row, 0].get_position(fig).height / 2,
+            gtag,
+            va="center", ha="right",
+            fontsize=9, fontweight="bold",
+            multialignment="center",
         )
 
     # ── colorbar ─────────────────────────────────────────────────────────
     if last_im is not None:
-        cbar = fig.colorbar(
-            last_im,
-            ax=axs.ravel().tolist(),
-            fraction=0.02,
-            pad=0.02,
-        )
-        cbar.set_label(metric_label, fontsize=10)
+        cbar_ax = fig.add_axes([0.90, 0.08, 0.016, 0.75])
+        cbar    = fig.colorbar(last_im, cax=cbar_ax)
+        cbar.set_label(metric_label, fontsize=12)
+        cbar.ax.tick_params(labelsize=12)
     else:
         print("⚠️  No finite maps — colorbar skipped.")
 
     if title:
-        fig.suptitle(title, y=0.96, fontsize=14)
+        fig.suptitle(title, fontsize=25, fontweight="bold")
 
     if fig_dir is not None:
         out = Path(fig_dir) / filename

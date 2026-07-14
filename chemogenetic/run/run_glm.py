@@ -3,55 +3,64 @@ run_glm.py
 ==========
 SLURM entry point: run the full GLM pipeline for all fish.
 
-Stages run in order:
-    A. CV            — per-fish hyperparameter selection (parallel across fish)
-    B. Choose global — aggregate CV results into K_global, drift_global, lam_global
-    C. Refit         — refit all cells with global params (parallel across fish)
-    D. Ablation      — drift-only ΔR² (parallel across fish)
-    E. IAAFT null    — surrogate null distribution (serial per fish, heavy compute)
-    F. Responders    — threshold + save pos/neg idx (parallel across fish)
+Stages:
+    A. CV            — per-fish hyperparameter selection
+    B. Choose global — aggregate CV results
+    C. Refit         — refit all cells with global params
+    D. Ablation      — drift-only ΔR²
+    E. IAAFT null    — surrogate null distribution
+    F. Responders    — threshold + save pos/neg idx
 
-Each stage can be toggled independently via the RUN_* flags, so you can
-re-run, e.g., just the null (E) without re-running CV or refit.
+Regressor: empirical HCRT population trace from hcrt_all.csv
+           (loaded once, passed as u_ext to all stages).
+           Falls back to CSTR capsaicin model if CSV not found.
 
-Usage
------
-    sbatch submit_glm.sh
-    # or interactively:
-    python run_glm.py
+Usage:
+    sbatch submit_glm.sh --config config_hcrt_trpv1_csn_120min
 
 Location:
-    ~/Zebrafish-whole-brain-analysis/chemogenetic/run/run_glm.py
+    ~/zwba/chemogenetic/run/run_glm.py
 """
 
+import argparse
 import sys
 from pathlib import Path
 
+import numpy as np
+import pandas as pd
 from joblib import Parallel, delayed
 from tqdm.auto import tqdm
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
 
-from chemogenetic.config.hcrt_trpv1_csn_120min import (
-    all_fish,
-    dir_analysis,
-    drug_end,
-    drug_start,
-    drug_uM_per_fish,
-    INCLUDED_BASELINE,
-    input_tag,
-    K_global,
-    drift_global,
-    lam_global,
-    lag_global,
-    NULL_TAG,
-    param_folder_name,
-    Q_ml_min,
-    RESPONDER_NULL_THRESH,
-    sampling_rate_hz,
-    V_ml,
-)
+# ── CLI ───────────────────────────────────────────────────────────────────────
+parser = argparse.ArgumentParser()
+parser.add_argument("--config", required=True,
+                    help="Config module under chemogenetic/config/")
+args, _ = parser.parse_known_args()
+
+import importlib
+cfg = importlib.import_module(f"chemogenetic.config.{args.config}")
+
+all_fish         = cfg.all_fish
+dir_analysis     = cfg.dir_analysis
+drug_end         = cfg.drug_end
+drug_start       = cfg.drug_start
+drug_uM          = cfg.drug_uM
+INCLUDED_BASELINE = cfg.INCLUDED_BASELINE
+input_tag        = cfg.input_tag
+K_global         = cfg.K_global
+drift_global     = cfg.drift_global
+lam_global       = cfg.lam_global
+lag_global       = cfg.lag_global
+NULL_TAG         = cfg.NULL_TAG
+param_folder_name = cfg.param_folder_name
+Q_ml_min         = cfg.Q_ml_min
+RESPONDER_NULL_THRESH = cfg.RESPONDER_NULL_THRESH
+sampling_rate_hz = cfg.sampling_rate_hz
+V_ml             = cfg.V_ml
+
 from chemogenetic.glm import (
     choose_global_params,
     cv_one_fish,
@@ -62,9 +71,9 @@ from chemogenetic.glm import (
 )
 
 # ============================================================
-# STAGE TOGGLES  — set False to skip a stage
+# STAGE TOGGLES
 # ============================================================
-RUN_CV         = True
+RUN_CV         = False   # set True for new experiments needing CV
 RUN_REFIT      = True
 RUN_ABLATION   = True
 RUN_NULL       = True
@@ -77,9 +86,8 @@ OVERWRITE_CV         = False
 OVERWRITE_REFIT      = False
 OVERWRITE_ABLATION   = False
 OVERWRITE_NULL       = False
-OVERWRITE_RESPONDERS = True    # always overwrite so idx reflect current null
+OVERWRITE_RESPONDERS = True
 
-# CV grid (set narrower for quick reruns)
 K_LIST        = (60, 120, 300, 600, 900, 1200)
 DRIFT_ORDERS  = (1, 2, 3)
 LAM_LIST      = (1e-2, 1e-1, 1e0, 1e1, 1e2, 1e3)
@@ -87,29 +95,60 @@ BLOCK_LEN_SEC = 10 * 60
 N_CELLS_CV    = 2000
 CHUNK_CELLS   = 2000
 
-# IAAFT null settings
-N_SURROGATES   = 200
-N_ITER_IAAFT   = 50
-N_CELLS_NULL   = 20000
+N_SURROGATES  = 200
+N_ITER_IAAFT  = 50
+N_CELLS_NULL  = 20000
 
-# Responder sign windows (in minutes within the fit window)
 BASELINE_WIN_MIN = (0.0,  15.0)
 DRUG_WIN_MIN     = (30.0, 45.0)
 
-# Parallelism
-N_JOBS_FISH = 10   # parallel fish for CV / refit / ablation / responders
-              # NOTE: IAAFT null runs serially (each fish uses all cores internally)
+N_JOBS_FISH = 10
 
 FIT_BASELINE_SEC = INCLUDED_BASELINE * 60
+
+# ============================================================
+# HCRT EMPIRICAL REGRESSOR
+# ============================================================
+# Load empirical HCRT population trace from hcrt_all.csv files.
+# Same pipeline as hcrt_regressor.ipynb: rolling 20th-pct tonic → z-score.
+# Falls back to CSTR capsaicin model (u_ext=None) if files not found.
+
+HCRT_BASE = "/resnick/home/ychiu/yun/lightsheet/hcrt-trpv1_hcrt-h2b-g8m_120min"
+HCRT_FISH_PATHS = [
+    f"{HCRT_BASE}/260426_hcrt-trpv1_hcrt-h2b-g8m_csn_10uM_fish1/hcrt_all.csv",
+    f"{HCRT_BASE}/260426_hcrt-trpv1_hcrt-h2b-g8m_csn_10uM_fish2/hcrt_all.csv",
+    f"{HCRT_BASE}/260426_hcrt-trpv1_hcrt-h2b-g8m_csn_10uM_fish3/hcrt_all.csv",
+]
+HCRT_TONIC_WINDOW = 600
+HCRT_TONIC_PCTILE = 0.20
+CSN_ONSET_VOL     = int(drug_start)
+TOTAL_VOLS        = 7200
+
+u_ext = None   # will be set below if CSV files exist
+
+if all(Path(p).exists() for p in HCRT_FISH_PATHS):
+    fish_tonic = []
+    for path in HCRT_FISH_PATHS:
+        raw = pd.read_csv(path)["Mean"].values
+        ft  = (pd.Series(raw)
+                 .rolling(HCRT_TONIC_WINDOW, center=True, min_periods=1)
+                 .quantile(HCRT_TONIC_PCTILE)
+                 .values)
+        mu    = ft[:CSN_ONSET_VOL].mean()
+        sigma = ft[:CSN_ONSET_VOL].std(ddof=1)
+        fish_tonic.append((ft - mu) / max(sigma, 1e-6))
+
+    u_ext = np.mean(fish_tonic, axis=0).astype(np.float32)
+    print(f"✅ HCRT regressor loaded: mean across {len(fish_tonic)} fish, "
+          f"peak={u_ext.max():.2f} at vol {u_ext.argmax()}")
+    input_tag = "HCRT"   # update tag so output folder name reflects regressor
+else:
+    print("⚠️  HCRT csv files not found — falling back to CSTR capsaicin regressor")
 
 
 # ============================================================
 # HELPERS
 # ============================================================
-def _drug_uM(fish):
-    return drug_uM_per_fish.get(fish, 10.0)
-
-
 def _common_kwargs(fish):
     return dict(
         fish=fish,
@@ -117,13 +156,14 @@ def _common_kwargs(fish):
         sampling_rate_hz=sampling_rate_hz,
         drug_start_frame_full=drug_start,
         drug_end_frame_full=drug_end,
-        drug_uM=_drug_uM(fish),
+        drug_uM=drug_uM,
         V_ml=V_ml,
         Q_ml_min=Q_ml_min,
         input_tag=input_tag,
         lag_global=lag_global,
         fit_baseline_sec=FIT_BASELINE_SEC,
         chunk_cells_fit=CHUNK_CELLS,
+        u_ext=u_ext,
     )
 
 
@@ -131,11 +171,12 @@ def _common_kwargs(fish):
 # MAIN
 # ============================================================
 def main():
-    print(f"GLM pipeline | {len(all_fish)} fish | dir_analysis={dir_analysis}")
-    print(f"  input_tag={input_tag}  K={K_global}  drift={drift_global}  "
-          f"lam={lam_global}  lag={lag_global}  null={NULL_TAG}\n")
+    print(f"GLM pipeline | {len(all_fish)} fish")
+    print(f"  config={args.config}  input_tag={input_tag}")
+    print(f"  K={K_global}  drift={drift_global}  lam={lam_global}  "
+          f"lag={lag_global}  null={NULL_TAG}\n")
 
-    # ── A: CV ────────────────────────────────────────────────
+    # ── A: CV ──────────────────────────────────────────────────
     if RUN_CV:
         print("── Stage A: CV ─────────────────────────────────────")
 
@@ -156,21 +197,13 @@ def main():
         for r in results:
             print(f"  {r['fish'][1]:50s}  {r['status']}")
 
-    # ── B: Choose globals ─────────────────────────────────────
-    # Always recompute from saved JSON — fast, no toggle needed.
-    print("\n── Stage B: Choose global params ───────────────────────")
-    gp = choose_global_params(all_fish, dir_analysis)
-    K_g, drift_g, lam_g = gp["K_global"], gp["drift_global"], gp["lam_global"]
-    print(f"  K_global={K_g}  drift_global={drift_g}  lam_global={lam_g:.3g}")
-    print(f"  (config values: K={K_global} drift={drift_global} lam={lam_global})")
-    print("  NOTE: using config values (manually set). Set RUN_CV=True to use CV globals.\n")
+    # ── B: Choose globals ──────────────────────────────────────
+    print("\n── Stage B: Using config globals (CV disabled) ──────────")
+    print(f"  K={K_global}  drift={drift_global}  lam={lam_global}")
 
-    # Use config globals (manual), not auto-computed, to match param_folder_name in config.
-    # If you want auto globals, replace K_global/drift_global/lam_global below with K_g/drift_g/lam_g.
-
-    # ── C: Refit ──────────────────────────────────────────────
+    # ── C: Refit ───────────────────────────────────────────────
     if RUN_REFIT:
-        print("── Stage C: Global refit ───────────────────────────────")
+        print("\n── Stage C: Global refit ───────────────────────────────")
 
         def _refit(fish):
             try:
@@ -188,7 +221,7 @@ def main():
         for r in results:
             print(f"  {r['fish'][1]:50s}  {r['status']}")
 
-    # ── D: Ablation ───────────────────────────────────────────
+    # ── D: Ablation ────────────────────────────────────────────
     if RUN_ABLATION:
         print("\n── Stage D: Drift-only ablation ────────────────────────")
 
@@ -208,8 +241,7 @@ def main():
         for r in results:
             print(f"  {r['fish'][1]:50s}  {r['status']}")
 
-    # ── E: IAAFT null ─────────────────────────────────────────
-    # Serial: each fish is compute-heavy (n_surrogates × ridge fits).
+    # ── E: IAAFT null ──────────────────────────────────────────
     if RUN_NULL:
         print("\n── Stage E: IAAFT null ─────────────────────────────────")
         for fish in all_fish:
@@ -226,7 +258,7 @@ def main():
             except Exception as e:
                 print(f"  {fish[1]:50s}  ERROR: {e}")
 
-    # ── F: Responder indices ──────────────────────────────────
+    # ── F: Responder indices ───────────────────────────────────
     if RUN_RESPONDERS:
         print("\n── Stage F: Save responder indices ─────────────────────")
 
@@ -242,6 +274,7 @@ def main():
                     null_percentile=RESPONDER_NULL_THRESH,
                     baseline_win_min=BASELINE_WIN_MIN,
                     drug_win_min=DRUG_WIN_MIN,
+                    u_ext=u_ext,
                     overwrite=OVERWRITE_RESPONDERS,
                 )
             except Exception as e:

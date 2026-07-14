@@ -90,7 +90,7 @@ TEMPLATE_PATH = Path(MEAN_BRAIN_PATH)
 # SETTINGS
 # ---------------------------------------------------------------------------
 OVERWRITE  = False  # True → recompute even if output files already exist
-TEST_MODE  = True   # True → run only the first fish for QC; set False for full batch
+TEST_MODE  = False   # True → run only the first fish for QC; set False for full batch
 
 # Voluseg raw volume geometry
 # volume_mean_raw.shape from read_data is (X, Y, Z) = (280, 544, 40)
@@ -104,6 +104,120 @@ ROTATION_K = 2  # 180° flip of X–Y axes
 # read_data return order (confirmed from notebook):
 #   data_array, volume_mean_raw, cell_x, cell_y, cell_z = read_data(...)
 # run_decompose only uses data_array and discards the rest with _.
+
+
+# ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# QC HELPER — runs for every fish regardless of TEST_MODE
+# ---------------------------------------------------------------------------
+def _plot_medoid_qc(
+    expt_ID, fish_out, vol_mean_raw, medoids_rot, vox_path, reg_final_path
+):
+    """
+    Save a 4-panel QC figure for one fish:
+        [Before XY | Before YZ | After XY | After YZ]
+    Background: grayscale brain (volume_mean_raw before, registered_final after).
+    Medoids: yellow (before), blue (after), alpha=0.4.
+    """
+    import matplotlib
+    matplotlib.use("Agg")   # non-interactive backend for SLURM nodes
+    import matplotlib.pyplot as plt
+    from matplotlib.gridspec import GridSpec
+    import ants as _ants
+
+    if not vox_path.exists():
+        print(f"  ⚠️  QC skipped — medoids_template_vox.npy not found")
+        return
+
+    transformed = np.load(str(vox_path))                         # (n_cells,3) float32
+    finite_mask = np.isfinite(transformed[:, 0])
+    valid_mov   = ~np.all(medoids_rot == -1, axis=1)
+
+    # load registered brain background
+    reg_brain = None
+    if reg_final_path.exists():
+        reg_brain = _ants.image_read(str(reg_final_path)).numpy().astype(np.float32)
+    else:
+        print(f"  ⚠️  registered_final not found, after-panel will show dots only")
+
+    vol_mean_raw = np.asarray(vol_mean_raw, dtype=np.float32)    # (X, Y, Z)
+
+    # projections
+    mov_xy  = np.nanmean(vol_mean_raw, axis=2)                   # (X, Y)
+    mov_yz  = np.nanmean(vol_mean_raw, axis=0)                   # (Y, Z)
+    tmpl_xy = np.nanmean(reg_brain, axis=2) if reg_brain is not None else None
+    tmpl_yz = np.nanmean(reg_brain, axis=0) if reg_brain is not None else None
+
+    # subsample for scatter speed
+    MAX_PTS = 80_000
+    rng = np.random.default_rng(0)
+
+    def _sub(mask):
+        idx = np.where(mask)[0]
+        return rng.choice(idx, MAX_PTS, replace=False) if idx.size > MAX_PTS else idx
+
+    mv = medoids_rot[_sub(valid_mov)].astype(float)              # (n, 3): x, y, z
+    tr = transformed[_sub(finite_mask)]                           # (n, 3): i, j, k
+
+    n_mov  = int(valid_mov.sum())
+    n_tmpl = int(finite_mask.sum())
+
+    DOT_B = dict(s=0.5, color="yellow",  alpha=0.4, linewidths=0)
+    DOT_A = dict(s=0.5, color="#4a9ee8", alpha=0.4, linewidths=0)
+
+    X_mov, Y_mov, Z_dim = vol_mean_raw.shape
+    X_tmpl = reg_brain.shape[0] if reg_brain is not None else X_mov
+    Y_tmpl = reg_brain.shape[1] if reg_brain is not None else Y_mov
+
+    # flip before-scatter y to match origin="lower"
+    mv_y_flip = (Y_mov - 1) - mv[:, 1]
+
+    width_ratios = [X_mov / Y_mov, Z_dim / Y_mov,
+                    X_tmpl / Y_tmpl, Z_dim / Y_tmpl]
+
+    fig = plt.figure(figsize=(14, 8))
+    fig.suptitle(f"QC: {expt_ID} — medoid transform", fontsize=13)
+    gs = GridSpec(1, 4, width_ratios=width_ratios, wspace=0.03)
+    ax_bxy = fig.add_subplot(gs[0, 0])
+    ax_byz = fig.add_subplot(gs[0, 1], sharey=ax_bxy)
+    ax_axy = fig.add_subplot(gs[0, 2])
+    ax_ayz = fig.add_subplot(gs[0, 3], sharey=ax_axy)
+
+    ax_bxy.imshow(mov_xy.T, cmap="gray", origin="lower",
+                  aspect="equal", interpolation="nearest")
+    ax_bxy.scatter(mv[:, 0], mv_y_flip, **DOT_B)
+    ax_bxy.set_title(f"Before — XY top-down\nN={n_mov:,}", fontsize=10)
+    ax_bxy.axis("off")
+
+    ax_byz.imshow(np.fliplr(mov_yz), cmap="gray", origin="lower",
+                  aspect="auto", interpolation="nearest")
+    ax_byz.scatter(mv[:, 2], mv_y_flip, **DOT_B)
+    ax_byz.set_title(f"Before — YZ side\nN={n_mov:,}", fontsize=10)
+    ax_byz.axis("off")
+
+    if tmpl_xy is not None:
+        ax_axy.imshow(tmpl_xy.T, cmap="gray", origin="upper",
+                      aspect="equal", interpolation="nearest")
+    ax_axy.scatter(tr[:, 0], tr[:, 1], **DOT_A)
+    ax_axy.set_title(f"After — XY top-down\nN={n_tmpl:,}", fontsize=10)
+    ax_axy.axis("off")
+
+    if tmpl_yz is not None:
+        ax_ayz.imshow(tmpl_yz, cmap="gray", origin="upper",
+                      aspect="auto", interpolation="nearest")
+    ax_ayz.scatter(tr[:, 2], tr[:, 1], **DOT_A)
+    ax_ayz.set_title(f"After — YZ side\nN={n_tmpl:,}", fontsize=10)
+    ax_ayz.axis("off")
+
+    plt.tight_layout()
+
+    qc_path = fish_out / "QC_figures" / "medoids_transform_QC.png"
+    qc_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(str(qc_path), dpi=200, bbox_inches="tight")
+    print(f"  ✅ QC figure saved → {qc_path}")
+    plt.close(fig)
 
 
 # ---------------------------------------------------------------------------
@@ -140,18 +254,12 @@ def main():
         vox_path  = fish_out / "medoids_template_vox.npy"
 
         try:
-            # ----------------------------------------------------------
-            # Step 1: load cell coordinates from voluseg
-            # ----------------------------------------------------------
-            # read_data returns: (data_array, volume_mean_raw, cell_x, cell_y, cell_z)
-            # volume_mean_raw.shape = (X, Y, Z) = (280, 544, 40) — already reoriented
+            # Step 1: load cell coordinates
             _, volume_mean_raw, cell_x, cell_y, cell_z = read_data(fish, dir_voluseg)
-            vol_shape = volume_mean_raw.shape    # (280, 544, 40)
+            vol_shape = volume_mean_raw.shape
             print(f"  volume_mean_raw.shape: {vol_shape}")
 
-            # ----------------------------------------------------------
-            # Step 2: compute true medoids (pairwise cdist)
-            # ----------------------------------------------------------
+            # Step 2: compute medoids
             if raw_path.exists() and not OVERWRITE:
                 print(f"  ⏩ medoids_all.npy exists, loading")
                 medoids_all = np.load(str(raw_path))
@@ -160,9 +268,7 @@ def main():
                 np.save(str(raw_path), medoids_all)
                 print(f"  ✅ Saved medoids_all.npy  → {raw_path}")
 
-            # ----------------------------------------------------------
-            # Step 3: rotate medoids 180° in X–Y to match ANTs convention
-            # ----------------------------------------------------------
+            # Step 3: rotate
             if rot_path.exists() and not OVERWRITE:
                 print(f"  ⏩ medoids_rot_all.npy exists, loading")
                 medoids_rot = np.load(str(rot_path))
@@ -171,9 +277,7 @@ def main():
                 np.save(str(rot_path), medoids_rot)
                 print(f"  ✅ Saved medoids_rot_all.npy → {rot_path}")
 
-            # ----------------------------------------------------------
-            # Step 4: transform rotated medoids to template space
-            # ----------------------------------------------------------
+            # Step 4: transform to template space
             if vox_path.exists() and not OVERWRITE:
                 print(f"  ⏩ medoids_template_vox.npy exists, skipping")
             else:
@@ -187,12 +291,9 @@ def main():
                         "Run run_registration_syn.py for this fish first."
                     )
 
-    # ⚠️  POINTS list = [affine, warp]  (reversed from image list)
-                # No whichtoinvert — transforms stored fish→template forward direction
+                # POINTS list = [affine, warp] (reversed from image list, no whichtoinvert)
                 transform_list_points = [str(affine), str(warp)]
 
-                # Build ANTs moving reference image with correct spacing
-                # (used for transform_index_to_physical_point)
                 mov_ref = ants.from_numpy(
                     volume_mean_raw.astype(np.float32),
                     spacing=(RES_X, RES_Y, RES_Z),
@@ -211,130 +312,25 @@ def main():
                 np.save(str(vox_path), medoids_vox)
                 print(f"  ✅ Saved medoids_template_vox.npy → {vox_path}")
 
+            # Step 5: QC figure — always, for every fish
+            reg_final = DIR_REGISTRATION / proj_ID / expt_ID / "expt_to_mean_registered_final.nii.gz"
+            _plot_medoid_qc(
+                expt_ID        = expt_ID,
+                fish_out       = fish_out,
+                vol_mean_raw   = volume_mean_raw,
+                medoids_rot    = medoids_rot,
+                vox_path       = vox_path,
+                reg_final_path = reg_final,
+            )
+
         except Exception as e:
             print(f"  ❌ {expt_ID} failed: {e}")
-            raise   # re-raise so the error is visible; remove for batch runs
+            raise
 
         finally:
             gc.collect()
 
     print("\nMedoid run complete.")
-
-    # ------------------------------------------------------------------
-    # QC plots (TEST_MODE only) — 2x2 layout:
-    #   Col 0: Before transform (moving space, volume_mean_raw background)
-    #   Col 1: After transform  (template space, registered_final background)
-    #   Row 0: XY top-down view
-    #   Row 1: YZ side view
-    # Medoids: yellow scatter, alpha=0.7, overlaid on grayscale brain
-    # ------------------------------------------------------------------
-    if TEST_MODE:
-        import matplotlib.pyplot as plt
-        import ants as _ants
-
-        qc_fish       = fish_to_run[0]
-        proj_ID_qc, expt_ID_qc = qc_fish
-        qc_f_dir      = fish_dir(dir_analysis, qc_fish)
-        vox_path      = qc_f_dir / "medoids_template_vox.npy"
-        rot_path      = qc_f_dir / "medoids_rot_all.npy"
-        reg_final     = DIR_REGISTRATION / proj_ID_qc / expt_ID_qc / "expt_to_mean_registered_final.nii.gz"
-
-        if not (vox_path.exists() and rot_path.exists()):
-            print("QC skipped — output files not found.")
-        else:
-            transformed = np.load(str(vox_path))   # (n_cells, 3) float32, NaN=invalid
-            medoids_rot = np.load(str(rot_path))    # (n_cells, 3) int,     -1=invalid
-
-            finite_mask = np.isfinite(transformed[:, 0])
-            valid_mov   = ~np.all(medoids_rot == -1, axis=1)
-
-            # load brain backgrounds
-            _, vol_mean_raw, _, _, _ = read_data(qc_fish, dir_voluseg)
-            vol_mean_raw = np.asarray(vol_mean_raw, dtype=np.float32)  # (X, Y, Z)
-
-            if reg_final.exists():
-                reg_brain = _ants.image_read(str(reg_final)).numpy().astype(np.float32)
-            else:
-                print(f"  ⚠️  registered_final not found: {reg_final}")
-                reg_brain = None
-
-            # projections — mean over the orthogonal axis
-            mov_xy  = np.nanmean(vol_mean_raw, axis=2)            # (X, Y)
-            mov_yz  = np.nanmean(vol_mean_raw, axis=0)            # (Y, Z)
-            tmpl_xy = np.nanmean(reg_brain, axis=2) if reg_brain is not None else None
-            tmpl_yz = np.nanmean(reg_brain, axis=0) if reg_brain is not None else None
-
-            # subsample medoids so scatter isn't too slow
-            MAX_PTS = 80_000
-            rng = np.random.default_rng(0)
-
-            def _sub(mask):
-                idx = np.where(mask)[0]
-                return rng.choice(idx, MAX_PTS, replace=False) if idx.size > MAX_PTS else idx
-
-            mv = medoids_rot[_sub(valid_mov)].astype(float)   # (n, 3): x, y, z
-            tr = transformed[_sub(finite_mask)]                # (n, 3): i, j, k
-
-            # figure
-            n_mov  = int(valid_mov.sum())
-            n_tmpl = int(finite_mask.sum())
-
-            DOT  = dict(s=0.5, color="yellow", alpha=0.4, linewidths=0)
-            GRAY = dict(origin="upper", cmap="gray", interpolation="nearest")
-
-            # Layout: 1 row × 4 cols
-            #   [Before XY | Before YZ | After XY | After YZ]
-            # Y axis is vertical in all panels → sharey pairs XY and YZ
-            # width_ratios proportional to X and Z dimensions so brains aren't distorted
-            X_mov, Y_mov, Z_dim = vol_mean_raw.shape   # e.g. (296, 532, 40)
-            X_tmpl = reg_brain.shape[0] if reg_brain is not None else X_mov
-
-            fig = plt.figure(figsize=(18, 8))
-            fig.suptitle(f"QC: {expt_ID_qc} — medoid transform", fontsize=13)
-            from matplotlib.gridspec import GridSpec
-            gs = GridSpec(
-                1, 4,
-                width_ratios=[X_mov, Z_dim, X_tmpl, Z_dim],
-                wspace=0.03,
-            )
-            ax_bxy = fig.add_subplot(gs[0, 0])
-            ax_byz = fig.add_subplot(gs[0, 1], sharey=ax_bxy)
-            ax_axy = fig.add_subplot(gs[0, 2])
-            ax_ayz = fig.add_subplot(gs[0, 3], sharey=ax_axy)
-
-            # Before XY — Y vertical (rows), X horizontal (cols)
-            ax_bxy.imshow(mov_xy.T, **GRAY, aspect="auto")
-            ax_bxy.scatter(mv[:, 0], mv[:, 1], **DOT)
-            ax_bxy.set_title(f"Before — XY top-down\nN={n_mov:,}", fontsize=10)
-            ax_bxy.axis("off")
-
-            # Before YZ — Y vertical (rows), Z horizontal (cols); no transpose
-            ax_byz.imshow(mov_yz, **GRAY, aspect="auto")
-            ax_byz.scatter(mv[:, 2], mv[:, 1], **DOT)
-            ax_byz.set_title(f"Before — YZ side\nN={n_mov:,}", fontsize=10)
-            ax_byz.axis("off")
-
-            # After XY
-            if tmpl_xy is not None:
-                ax_axy.imshow(tmpl_xy.T, **GRAY, aspect="auto")
-            ax_axy.scatter(tr[:, 0], tr[:, 1], **DOT)
-            ax_axy.set_title(f"After — XY top-down\nN={n_tmpl:,}", fontsize=10)
-            ax_axy.axis("off")
-
-            # After YZ — Y vertical, Z horizontal; no transpose
-            if tmpl_yz is not None:
-                ax_ayz.imshow(tmpl_yz, **GRAY, aspect="auto")
-            ax_ayz.scatter(tr[:, 2], tr[:, 1], **DOT)
-            ax_ayz.set_title(f"After — YZ side\nN={n_tmpl:,}", fontsize=10)
-            ax_ayz.axis("off")
-
-            plt.tight_layout()
-
-            qc_path = qc_f_dir / "figures" / "medoids_transform_QC.png"
-            qc_path.parent.mkdir(parents=True, exist_ok=True)
-            fig.savefig(str(qc_path), dpi=200, bbox_inches="tight")
-            print(f"\nQC figure saved → {qc_path}")
-            plt.close(fig)
 
 
 if __name__ == "__main__":

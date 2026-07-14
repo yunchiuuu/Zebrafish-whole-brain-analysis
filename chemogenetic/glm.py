@@ -286,12 +286,12 @@ def build_drug_concentration(base_dir, T, sampling_rate_hz,
 
 def _select_input(C_full, dC_full, input_tag, fit_start, fit_end, lag):
     """Slice regressor to fit window and apply causal lag."""
-    if input_tag == "C":
+    if input_tag in ("C", "HCRT"):   # HCRT uses C_full set to u_ext by caller
         u = C_full[fit_start:fit_end].astype(np.float32)
     elif input_tag == "dC":
         u = dC_full[fit_start:fit_end].astype(np.float32)
     else:
-        raise ValueError(f"input_tag must be 'C' or 'dC', got {input_tag!r}")
+        raise ValueError(f"input_tag must be 'C', 'dC', or 'HCRT', got {input_tag!r}")
     return shift_with_zeros(u, lag)
 
 
@@ -396,7 +396,7 @@ def cv_one_fish(fish, dir_analysis, sampling_rate_hz,
     """
     Run CV for one fish and save best params + CV table.
 
-    Reads  : dir_analysis / proj_ID / expt_ID / data_array_f_tonic.npy
+    Reads  : dir_analysis / proj_ID / expt_ID / f_tonic.npy
     Writes : dir_analysis / proj_ID / expt_ID /
                 C_capsaicin.npy, dC_capsaicin.npy
                 kernel_ridge_best_params.json
@@ -414,7 +414,7 @@ def cv_one_fish(fish, dir_analysis, sampling_rate_hz,
         print(f"⏩ {expt_ID}: CV results exist, skipping.")
         return {"fish": fish, "status": "skipped_cv"}
 
-    Ft_path = base_dir / "data_array_f_tonic.npy"
+    Ft_path = base_dir / "f_tonic.npy"
     if not Ft_path.exists():
         raise FileNotFoundError(f"Missing F_tonic: {Ft_path}")
 
@@ -524,6 +524,7 @@ def refit_one_fish(fish, dir_analysis, sampling_rate_hz,
                    input_tag="C", lag_global=0,
                    fit_baseline_sec=15 * 60,
                    chunk_cells_fit=2000,
+                   u_ext=None,
                    overwrite=False, show_progress=True):
     """
     Refit all cells using global hyperparameters. Save kernels, drift weights, R², meta.
@@ -551,18 +552,22 @@ def refit_one_fish(fish, dir_analysis, sampling_rate_hz,
         return {"fish": fish, "status": "skipped_refit", "run_dir": str(run_dir)}
 
     print(f"▶️  {expt_ID}: global refit ({run_dir.name})")
-    Ft_path = base_dir / "data_array_f_tonic.npy"
+    Ft_path = base_dir / "f_tonic.npy"
     if not Ft_path.exists():
         raise FileNotFoundError(f"Missing F_tonic: {Ft_path}")
 
     Ft = np.load(str(Ft_path), mmap_mode="r")
     n_cells, Tfull = Ft.shape
 
-    C_full, dC_full = build_drug_concentration(
-        base_dir, Tfull, sampling_rate_hz,
-        drug_start_frame_full, drug_end_frame_full,
-        drug_uM, V_ml, Q_ml_min,
-    )
+    if u_ext is not None:
+        C_full  = np.asarray(u_ext, dtype=np.float32).reshape(-1)[:Tfull]
+        dC_full = None
+    else:
+        C_full, dC_full = build_drug_concentration(
+            base_dir, Tfull, sampling_rate_hz,
+            drug_start_frame_full, drug_end_frame_full,
+            drug_uM, V_ml, Q_ml_min,
+        )
 
     fit_start, fit_end, drug_start_fit = get_fit_window_indices(
         Tfull, sampling_rate_hz, drug_start_frame_full, fit_baseline_sec,
@@ -628,6 +633,7 @@ def ablation_one_fish(fish, dir_analysis, sampling_rate_hz,
                       input_tag="C", lag_global=0,
                       fit_baseline_sec=15 * 60,
                       chunk_cells_fit=2000,
+                      u_ext=None,
                       overwrite=False, show_progress=True):
     """
     Compute ΔR² = R²_full - R²_drift_only for one fish.
@@ -653,18 +659,22 @@ def ablation_one_fish(fish, dir_analysis, sampling_rate_hz,
         return {"fish": fish, "status": "skipped_ablation"}
 
     print(f"▶️  {expt_ID}: drift-only ablation ({run_dir.name})")
-    Ft_path = base_dir / "data_array_f_tonic.npy"
+    Ft_path = base_dir / "f_tonic.npy"
     if not Ft_path.exists():
         raise FileNotFoundError(f"Missing F_tonic: {Ft_path}")
 
     Ft = np.load(str(Ft_path), mmap_mode="r")
     n_cells, Tfull = Ft.shape
 
-    C_full, dC_full = build_drug_concentration(
-        base_dir, Tfull, sampling_rate_hz,
-        drug_start_frame_full, drug_end_frame_full,
-        drug_uM, V_ml, Q_ml_min,
-    )
+    if u_ext is not None:
+        C_full  = np.asarray(u_ext, dtype=np.float32).reshape(-1)[:Tfull]
+        dC_full = None
+    else:
+        C_full, dC_full = build_drug_concentration(
+            base_dir, Tfull, sampling_rate_hz,
+            drug_start_frame_full, drug_end_frame_full,
+            drug_uM, V_ml, Q_ml_min,
+        )
 
     fit_start, fit_end, _ = get_fit_window_indices(
         Tfull, sampling_rate_hz, drug_start_frame_full, fit_baseline_sec,
@@ -762,6 +772,7 @@ def iaaft_null_one_fish(fish, dir_analysis, sampling_rate_hz,
                          n_surrogates=200, n_iter_iaaft=50,
                          n_cells_null=20000, null_percentile=99,
                          seed=0, chunk_cells_fit=2000,
+                         u_ext=None,
                          overwrite=False, show_progress=True):
     """
     Compute IAAFT null ΔR² distribution for one fish.
@@ -792,26 +803,28 @@ def iaaft_null_one_fish(fish, dir_analysis, sampling_rate_hz,
         print(f"⏩ {expt_ID}: IAAFT null exists, skipping.")
         return {"fish": fish, "status": f"skipped_null_{NULL_TAG}"}
 
-    Ft_path = base_dir / "data_array_f_tonic.npy"
+    Ft_path = base_dir / "f_tonic.npy"
     if not Ft_path.exists():
         raise FileNotFoundError(f"Missing F_tonic: {Ft_path}")
 
     Ft = np.load(str(Ft_path), mmap_mode="r")
     n_cells, Tfull = Ft.shape
 
-    C_full, dC_full = build_drug_concentration(
-        base_dir, Tfull, sampling_rate_hz,
-        drug_start_frame_full, drug_end_frame_full,
-        drug_uM, V_ml, Q_ml_min,
-    )
+    if u_ext is not None:
+        C_full  = np.asarray(u_ext, dtype=np.float32).reshape(-1)[:Tfull]
+        dC_full = None
+    else:
+        C_full, dC_full = build_drug_concentration(
+            base_dir, Tfull, sampling_rate_hz,
+            drug_start_frame_full, drug_end_frame_full,
+            drug_uM, V_ml, Q_ml_min,
+        )
 
     fit_start, fit_end, _ = get_fit_window_indices(
         Tfull, sampling_rate_hz, drug_start_frame_full, fit_baseline_sec,
     )
     Tfit  = fit_end - fit_start
     u_fit = _select_input(C_full, dC_full, input_tag, fit_start, fit_end, lag_global)
-
-    # sample cells for null
     rng = np.random.default_rng(seed)
     n_null = int(min(n_cells_null, n_cells))
     idx_null = np.sort(rng.choice(n_cells, size=n_null, replace=False))
@@ -887,6 +900,7 @@ def save_responder_idx(fish, dir_analysis, sampling_rate_hz,
                         baseline_win_min=(0.0, 15.0),
                         drug_win_min=(30.0, 45.0),
                         yhat_sign_eps=0.0, chunk_cells=20000,
+                        u_ext=None,
                         overwrite=True):
     """
     Threshold ΔR² vs null and split responders into pos/neg by kernel sign.
@@ -951,10 +965,16 @@ def save_responder_idx(fish, dir_analysis, sampling_rate_hz,
 
     C_path  = base_dir / "C_capsaicin.npy"
     dC_path = base_dir / "dC_capsaicin.npy"
-    C_full  = np.load(str(C_path)).astype(np.float32).ravel()
-    u_fit   = (C_full[fit_start:fit_end] if it == "C"
-               else np.load(str(dC_path)).astype(np.float32).ravel()[fit_start:fit_end])
-    u_fit   = shift_with_zeros(u_fit, lag_frames)
+
+    if u_ext is not None:
+        C_full = np.asarray(u_ext, dtype=np.float32).reshape(-1)
+        u_fit  = C_full[fit_start:fit_end]
+    elif it in ("C", "HCRT"):
+        C_full = np.load(str(C_path)).astype(np.float32).ravel()
+        u_fit  = C_full[fit_start:fit_end]
+    else:
+        u_fit  = np.load(str(dC_path)).astype(np.float32).ravel()[fit_start:fit_end]
+    u_fit = shift_with_zeros(u_fit, lag_frames)
 
     K = int(K_global)
     U = build_U_from_input(u_fit, K).astype(np.float32)

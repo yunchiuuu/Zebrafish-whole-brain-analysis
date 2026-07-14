@@ -33,6 +33,7 @@ Location:
 
 # %% ── Cell 0: imports + config ───────────────────────────────────────────
 
+import argparse
 import gc
 import importlib
 import sys
@@ -45,9 +46,13 @@ import numpy as np
 from joblib import Parallel, delayed
 from tqdm.auto import tqdm
 
-# ── set config name for interactive use; override via --config for sbatch ──
-CONFIG_NAME = "config_hcrt_trpv1_csn_120min"   # ← edit as needed
-cfg = importlib.import_module(f"chemogenetic.config.{CONFIG_NAME}")
+# ── config: --config arg for sbatch, fallback to hardcoded for interactive ──
+parser = argparse.ArgumentParser()
+parser.add_argument("--config", default="config_hcrt_trpv1_csn_120min",
+                    help="Config module under chemogenetic/config/")
+args, _ = parser.parse_known_args()
+
+cfg = importlib.import_module(f"chemogenetic.config.{args.config}")
 
 from utils.data_io import fish_dir
 from chemogenetic.temporal_windows import (
@@ -61,6 +66,7 @@ from chemogenetic.temporal_windows import (
     load_epoch_dprime,
     N_WINDOWS,
     WINDOW_LABELS,
+    TEMPORAL_WINDOWS,
 )
 from chemogenetic.brainmap import (
     _coarse_shape,
@@ -69,11 +75,12 @@ from chemogenetic.brainmap import (
 )
 
 # ── directories + fish lists ──────────────────────────────────────────────
-dir_analysis = cfg.dir_analysis
-EXPT_FISH    = cfg.expt_fish_csn
-CTRL_FISH    = cfg.ctrl_fish_csn
-EXPT_TAG     = cfg.EXPT_TAG
-CTRL_TAG     = cfg.CTRL_TAG
+dir_analysis  = cfg.dir_analysis
+EXPT_FISH     = cfg.expt_fish
+CTRL_FISH     = cfg.ctrl_fish
+EXPT_TAG      = cfg.EXPT_TAG
+CTRL_TAG      = cfg.CTRL_TAG
+CLIP_ABS_DZ   = cfg.CLIP_ABS_DZ   # clip extreme ΔZ before voxelization
 
 COMPARISON_FIG_DIR = (
     Path(dir_analysis) / "comparisons" / cfg.COMPARISON_TAG / "figures"
@@ -84,16 +91,94 @@ COMPARISON_FIG_DIR.mkdir(parents=True, exist_ok=True)
 DS     = (5, 5, 2)       # coarse-grid downsampling (X, Y, Z)
 N_JOBS = 25              # parallel workers for voxelization
 
-VMIN_DZ = -5.0
-VMAX_DZ =  5.0
-VMIN_DP = -5.0
-VMAX_DP =  5.0
+VMIN_DZ = -3.0
+VMAX_DZ =  3.0
+VMIN_DP = -0.6
+VMAX_DP =  0.6
 
 # Template brain shape (X, Y, Z) in full-resolution template voxels.
-# Verify with: ants.image_read(TEMPLATE_PATH).shape
-BRAIN_SHAPE = (280, 544, 40)   # ← verify against your template
+BRAIN_SHAPE = (288, 568, 40)   # confirmed from template_mean_brain.nii.gz
 
 RECOMPUTE_EPOCHS = False   # True → recompute even if epoch arrays exist
+
+# ── HCRT reference traces — lifted from hcrt_regressor.ipynb ─────────────
+# Source: raw mean HCRT fluorescence from hcrt_all.csv per fish
+# Pipeline: F_tonic  = rolling 20th-percentile (600 vols, centered)
+#            F_phasic = (F - F_tonic) / F_tonic
+#            Both z-scored on baseline (vols 0:CSN_ONSET_VOL)
+
+import pandas as pd
+
+HCRT_BASE = "/resnick/home/ychiu/yun/lightsheet/hcrt-trpv1_hcrt-h2b-g8m_120min"
+HCRT_FISH_PATHS = [
+    f"{HCRT_BASE}/260426_hcrt-trpv1_hcrt-h2b-g8m_csn_10uM_fish1/hcrt_all.csv",
+    f"{HCRT_BASE}/260426_hcrt-trpv1_hcrt-h2b-g8m_csn_10uM_fish2/hcrt_all.csv",
+    f"{HCRT_BASE}/260426_hcrt-trpv1_hcrt-h2b-g8m_csn_10uM_fish3/hcrt_all.csv",
+]
+HCRT_FISH_LABELS   = ["fish1", "fish2", "fish3"]
+HCRT_TONIC_WINDOW  = 600    # vols (~10 min), matches voluseg convention
+HCRT_TONIC_PCTILE  = 0.20
+CSN_ONSET_VOL      = 2700
+TOTAL_VOLS_HCRT    = 7200
+
+hcrt_df        = None
+hcrt_window_dz = None
+hcrt_window_dp = None
+
+if all(Path(p).exists() for p in HCRT_FISH_PATHS):
+    fish_tonic  = {}
+    fish_phasic = {}
+
+    for label, path in zip(HCRT_FISH_LABELS, HCRT_FISH_PATHS):
+        raw = pd.read_csv(path)["Mean"].values   # raw HCRT mean fluorescence
+
+        # F_tonic: rolling 20th-percentile, centered — matches notebook exactly
+        f_tonic = (pd.Series(raw)
+                     .rolling(HCRT_TONIC_WINDOW, center=True, min_periods=1)
+                     .quantile(HCRT_TONIC_PCTILE)
+                     .values)
+
+        # F_phasic: (F - F_tonic) / F_tonic
+        f_phasic = (raw - f_tonic) / np.maximum(f_tonic, 1e-6)
+
+        # z-score each on baseline (vols 0:CSN_ONSET_VOL)
+        for sig, store in [(f_tonic, fish_tonic), (f_phasic, fish_phasic)]:
+            mu    = sig[:CSN_ONSET_VOL].mean()
+            sigma = sig[:CSN_ONSET_VOL].std(ddof=1)
+            store[label] = (sig - mu) / max(sigma, 1e-6)
+
+        print(f"  {label}: tonic bl z={fish_tonic[label][:CSN_ONSET_VOL].mean():.4f}  "
+              f"phasic bl z={fish_phasic[label][:CSN_ONSET_VOL].mean():.4f}")
+
+    t_min      = np.arange(TOTAL_VOLS_HCRT) / 60.0
+    tonic_mat  = np.stack([fish_tonic[l]  for l in HCRT_FISH_LABELS])  # (3, T)
+    phasic_mat = np.stack([fish_phasic[l] for l in HCRT_FISH_LABELS])  # (3, T)
+    n_hcrt     = tonic_mat.shape[0]
+
+    hcrt_df = pd.DataFrame({
+        "time_min":        t_min,
+        "hcrt_tonic_z":   tonic_mat.mean(axis=0),
+        "hcrt_tonic_sem":  tonic_mat.std(axis=0, ddof=1) / np.sqrt(n_hcrt),
+        "hcrt_phasic_z":  phasic_mat.mean(axis=0),
+        "hcrt_phasic_sem": phasic_mat.std(axis=0, ddof=1) / np.sqrt(n_hcrt),
+    })
+    for label in HCRT_FISH_LABELS:
+        hcrt_df[f"tonic_{label}"]  = fish_tonic[label]
+        hcrt_df[f"phasic_{label}"] = fish_phasic[label]
+
+    # per-window mean z during window (already baseline-normalised via z-score)
+    hcrt_window_dz = [float(hcrt_df["hcrt_tonic_z"].values[s:e].mean())
+                      for _, s, e in TEMPORAL_WINDOWS]
+    hcrt_window_dp = [float(hcrt_df["hcrt_phasic_z"].values[s:e].mean())
+                      for _, s, e in TEMPORAL_WINDOWS]
+
+    print(f"HCRT tonic  ΔZ per window: {[f'{v:.2f}' for v in hcrt_window_dz]}")
+    print(f"HCRT phasic d' per window: {[f'{v:.2f}' for v in hcrt_window_dp]}")
+else:
+    print("⚠️  One or more hcrt_all.csv not found — HCRT row will be skipped")
+    print(f"    Expected base: {HCRT_BASE}")
+
+HCRT_WINDOW_VOLS = [(s, e) for _, s, e in TEMPORAL_WINDOWS]
 
 
 # %% ── Cell 1: compute epoch ΔZ + d' for all fish ─────────────────────────
@@ -172,7 +257,8 @@ def _process_one_fish(fish, metric: str) -> list:
 
     vols = []
     for w in range(N_WINDOWS):
-        vol = _voxelize_cell_values(coords, arr[:, w], BRAIN_SHAPE, DS)
+        vals = np.clip(arr[:, w], -CLIP_ABS_DZ, CLIP_ABS_DZ)
+        vol  = _voxelize_cell_values(coords, vals, BRAIN_SHAPE, DS)
         vols.append(vol)
 
     del coords, arr
@@ -204,8 +290,8 @@ def _run_group(fish_list, metric: str, group_tag: str) -> list:
     return avg_maps
 
 
-# ── run for both metrics ──────────────────────────────────────────────────
-group_maps = {}   # group_maps[metric][tag] = list of N_WINDOWS volumes
+# ── run for both tonic ΔZ and phasic d' ──────────────────────────────────
+group_maps = {}
 
 for metric in ("dz", "dprime"):
     group_maps[metric] = {}
@@ -225,75 +311,63 @@ print("=" * 60)
 n_expt = len(EXPT_FISH)
 n_ctrl = len(CTRL_FISH)
 
-# ── per-group tonic ΔZ ───────────────────────────────────────────────────
-for tag, fish_list in all_groups.items():
-    n = len(fish_list)
-    plot_group_comparison(
-        ctrl_maps    = group_maps["dz"][CTRL_TAG],
-        expt_maps    = group_maps["dz"][EXPT_TAG],
-        window_labels= WINDOW_LABELS,
-        brain_shape  = BRAIN_SHAPE,
-        DS           = DS,
-        ctrl_tag     = f"{CTRL_TAG} (N={n_ctrl})",
-        expt_tag     = f"{EXPT_TAG} (N={n_expt})",
-        metric_label = "Tonic ΔZ (window mean z-score vs baseline)",
-        title        = f"Tonic ΔZ | DS={DS} | 15min window 10min step",
-        vmin         = VMIN_DZ,
-        vmax         = VMAX_DZ,
-        fig_dir      = COMPARISON_FIG_DIR,
-        filename     = "temporal_dz_CTRL_vs_EXPT.png",
-    )
-    break   # one figure covers both groups (cols = CTRL vs EXPT)
-
-# ── per-group phasic d' ───────────────────────────────────────────────────
-plot_group_comparison(
-    ctrl_maps    = group_maps["dprime"][CTRL_TAG],
-    expt_maps    = group_maps["dprime"][EXPT_TAG],
-    window_labels= WINDOW_LABELS,
-    brain_shape  = BRAIN_SHAPE,
-    DS           = DS,
-    ctrl_tag     = f"{CTRL_TAG} (N={n_ctrl})",
-    expt_tag     = f"{EXPT_TAG} (N={n_expt})",
-    metric_label = "Phasic d′ (window mean z-score vs baseline)",
-    title        = f"Phasic d′ | DS={DS} | 15min window 10min step",
-    vmin         = VMIN_DP,
-    vmax         = VMAX_DP,
-    fig_dir      = COMPARISON_FIG_DIR,
-    filename     = "temporal_dprime_CTRL_vs_EXPT.png",
-)
-
-# ── EXPT − CTRL difference maps ───────────────────────────────────────────
-for metric, label, vmin, vmax, fname in [
-    ("dz",     "Tonic ΔZ (EXPT − CTRL)",     VMIN_DZ, VMAX_DZ,
-     "temporal_dz_EXPT_minus_CTRL.png"),
-    ("dprime", "Phasic d′ (EXPT − CTRL)",    VMIN_DP, VMAX_DP,
-     "temporal_dprime_EXPT_minus_CTRL.png"),
-]:
+def _diff_maps(metric):
+    """Compute per-window EXPT − CTRL difference volumes."""
     diff = []
     for w in range(N_WINDOWS):
         e = group_maps[metric][EXPT_TAG][w]
         c = group_maps[metric][CTRL_TAG][w]
-        if e is not None and c is not None:
-            diff.append((e - c).astype(np.float32))
-        else:
-            diff.append(None)
+        diff.append((e - c).astype(np.float32) if e is not None and c is not None else None)
+    return diff
 
-    # for the difference map, both columns show the same diff
-    # (re-use plot_group_comparison with identical maps and retitle cols)
-    plot_group_comparison(
-        ctrl_maps    = diff,
-        expt_maps    = diff,
-        window_labels= WINDOW_LABELS,
-        brain_shape  = BRAIN_SHAPE,
-        DS           = DS,
-        ctrl_tag     = "EXPT − CTRL",
-        expt_tag     = "EXPT − CTRL",
-        metric_label = label,
-        title        = f"{label} | DS={DS}",
-        vmin         = vmin,
-        vmax         = vmax,
-        fig_dir      = COMPARISON_FIG_DIR,
-        filename     = fname,
-    )
+# ── tonic ΔZ: CTRL | EXPT | EXPT−CTRL ───────────────────────────────────
+plot_group_comparison(
+    ctrl_maps         = group_maps["dz"][CTRL_TAG],
+    expt_maps         = group_maps["dz"][EXPT_TAG],
+    diff_maps         = _diff_maps("dz"),
+    window_labels     = WINDOW_LABELS,
+    brain_shape       = BRAIN_SHAPE,
+    DS                = DS,
+    ctrl_tag          = f"{CTRL_TAG}\n(N={n_ctrl})",
+    expt_tag          = f"{EXPT_TAG}\n(N={n_expt})",
+    diff_tag          = "EXPT − CTRL",
+    metric_label      = "Tonic ΔZ",
+    title             = f"Tonic ΔZ | DS={DS} | 15min window 10min step | clip={CLIP_ABS_DZ}",
+    vmin              = VMIN_DZ,
+    vmax              = VMAX_DZ,
+    hcrt_df           = hcrt_df,
+    hcrt_trace_col    = "hcrt_tonic_z",
+    hcrt_sem_col      = "hcrt_tonic_sem",
+    hcrt_fish_cols    = [f"tonic_{l}" for l in HCRT_FISH_LABELS],
+    hcrt_trace_label  = "Hcrt F_tonic",
+    hcrt_window_vols  = HCRT_WINDOW_VOLS,
+    fig_dir           = COMPARISON_FIG_DIR,
+    filename          = "temporal_dz_CTRL_vs_EXPT.png",
+)
+
+# ── phasic d': CTRL | EXPT | EXPT−CTRL ───────────────────────────────────
+plot_group_comparison(
+    ctrl_maps         = group_maps["dprime"][CTRL_TAG],
+    expt_maps         = group_maps["dprime"][EXPT_TAG],
+    diff_maps         = _diff_maps("dprime"),
+    window_labels     = WINDOW_LABELS,
+    brain_shape       = BRAIN_SHAPE,
+    DS                = DS,
+    ctrl_tag          = f"{CTRL_TAG}\n(N={n_ctrl})",
+    expt_tag          = f"{EXPT_TAG}\n(N={n_expt})",
+    diff_tag          = "EXPT − CTRL",
+    metric_label      = "Phasic d′",
+    title             = f"Phasic d′ | DS={DS} | 15min window 10min step",
+    vmin              = VMIN_DP,
+    vmax              = VMAX_DP,
+    hcrt_df           = hcrt_df,
+    hcrt_trace_col    = "hcrt_phasic_z",
+    hcrt_sem_col      = "hcrt_phasic_sem",
+    hcrt_fish_cols    = [f"phasic_{l}" for l in HCRT_FISH_LABELS],
+    hcrt_trace_label  = "Hcrt F_phasic",
+    hcrt_window_vols  = HCRT_WINDOW_VOLS,
+    fig_dir           = COMPARISON_FIG_DIR,
+    filename          = "temporal_dprime_CTRL_vs_EXPT.png",
+)
 
 print(f"\nAll figures saved → {COMPARISON_FIG_DIR}")
