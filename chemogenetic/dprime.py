@@ -204,7 +204,7 @@ def dprime_one_fish(
         print(f"⏩ {expt_ID}: d′ exists, skipping.")
         return {"fish": fish, "status": "skipped"}
 
-    Fp_path = out_dir / "data_array_f_phasic.npy"
+    Fp_path = out_dir / "f_phasic.npy"
     if not Fp_path.exists():
         raise FileNotFoundError(f"Missing F_phasic for {expt_ID}: {Fp_path}")
 
@@ -244,3 +244,224 @@ def dprime_one_fish(
     gc.collect()
 
     return {"fish": fish, "status": "ok", **summ}
+
+
+# ============================================================
+# IAAFT NULL FOR d′
+# ============================================================
+# Design: unlike the tonic GLM (which has a shared regressor to phase-
+# randomize), d′ has no regressor — it's a direct baseline-vs-drug
+# comparison on each cell's own trace. To keep the same "randomize one
+# shared object, reuse across many cells" compute structure as the GLM
+# null, we IAAFT-randomize the *window-label assignment* (which frames
+# count as baseline vs drug) rather than each cell's signal. Every
+# cell's real trace is left untouched; only which frames are called
+# "baseline" and "drug" gets scrambled per surrogate.
+#
+# The label vector is binary (0=baseline, 1=drug) over the concatenated
+# [baseline_frames, drug_frames] pool. IAAFT preserves the exact 0/1
+# counts (rank-matching step) while approximately preserving the
+# autocorrelation structure of the block assignment, then scrambles
+# the timing — so the surrogate's baseline/drug windows are the same
+# sizes as the real windows but disconnected from the true drug onset.
+
+def _iaaft_1d(x, n_iter=50, rng=None):
+    """
+    Standard IAAFT surrogate of a 1D signal: preserves the amplitude
+    (value) distribution exactly and approximately preserves the power
+    spectrum, while randomizing phase/timing.
+    """
+    if rng is None:
+        rng = np.random.default_rng()
+    x = np.asarray(x, dtype=np.float64)
+    n = x.size
+    x_sorted = np.sort(x)
+    amp_spec = np.abs(np.fft.rfft(x))
+
+    surrogate = rng.permutation(x)
+    for _ in range(n_iter):
+        f = np.fft.rfft(surrogate)
+        phases = np.angle(f)
+        surrogate = np.fft.irfft(amp_spec * np.exp(1j * phases), n=n)
+        ranks = np.argsort(np.argsort(surrogate))
+        surrogate = x_sorted[ranks]
+    return surrogate
+
+
+def iaaft_null_dprime_one_fish(
+    fish,
+    dir_analysis,
+    baseline_start,
+    baseline_end,
+    drug_start,
+    drug_end,
+    sampling_rate_hz=1.0,
+    offset_sec=15 * 60,
+    amplitude_mode="raw",
+    var_floor=1e-4,
+    eps_var=1e-8,
+    n_surrogates=200,
+    n_iter_iaaft=50,
+    n_cells_null=20000,
+    null_percentile=95,
+    seed=0,
+    overwrite=False,
+):
+    """
+    Build an IAAFT-based null distribution for phasic d′ and save a
+    single symmetric magnitude threshold (matches notebook convention
+    of a symmetric ±thresh, e.g. ±0.5).
+
+    Writes to dir_analysis / proj_ID / expt_ID /:
+        phasic_dprime_iaaft_nullp{P}_thresh.npy   (scalar, float32)
+        phasic_dprime_null__iaaft.npy             (n_surrogates, n_sample)
+
+    Returns
+    -------
+    dict with fish, status, thresh.
+    """
+    proj_ID, expt_ID = fish
+    out_dir = fish_dir(dir_analysis, fish)
+
+    ptag = int(null_percentile)
+    thresh_path = out_dir / f"phasic_dprime_iaaft_nullp{ptag}_thresh.npy"
+    null_path   = out_dir / "phasic_dprime_null__iaaft.npy"
+
+    if not overwrite and thresh_path.exists():
+        thr = float(np.load(str(thresh_path)))
+        print(f"⏩ {expt_ID}: d′ IAAFT null exists, thr=±{thr:.4f}")
+        return {"fish": fish, "status": "skipped", "thresh": thr}
+
+    Fp_path = out_dir / "f_phasic.npy"
+    if not Fp_path.exists():
+        raise FileNotFoundError(f"Missing F_phasic for {expt_ID}: {Fp_path}")
+
+    Fp = np.load(str(Fp_path), mmap_mode="r")
+    n_cells, Tfull = Fp.shape
+
+    b_s, b_e = _get_window(baseline_start, baseline_end, sampling_rate_hz, offset_sec)
+    d_s, d_e = _get_window(drug_start,     drug_end,     sampling_rate_hz, offset_sec)
+
+    if d_s < b_e:
+        raise ValueError(
+            f"{expt_ID}: drug window starts before baseline window ends "
+            f"(unexpected overlap) — b_e={b_e}, d_s={d_s}"
+        )
+
+    n_base = b_e - b_s
+    n_drug = d_e - d_s
+    label  = np.concatenate([np.zeros(n_base), np.ones(n_drug)])
+
+    # ── sample cells for the null ──────────────────────────────────────
+    rng = np.random.default_rng(seed)
+    n_sample = min(n_cells_null, n_cells)
+    sample_idx = np.sort(rng.choice(n_cells, size=n_sample, replace=False))
+
+    # load only the contiguous [b_s, d_e) block for sampled cells
+    Fp_block = np.asarray(Fp[sample_idx, b_s:d_e], dtype=np.float32)
+
+    base_rel   = np.arange(0, n_base)
+    drug_rel   = np.arange(d_s - b_s, d_s - b_s + n_drug)
+    global_rel = np.concatenate([base_rel, drug_rel])   # order matches `label`
+
+    null_vals = np.empty((n_surrogates, n_sample), dtype=np.float32)
+
+    iterator = tqdm(range(n_surrogates), desc=f"{expt_ID} d′ IAAFT null", unit="surr")
+    for s in iterator:
+        surr_label = _iaaft_1d(label, n_iter=n_iter_iaaft, rng=rng)
+        order = np.argsort(surr_label)                  # low → high
+        surr_base_rel = global_rel[order[:n_base]]
+        surr_drug_rel = global_rel[order[n_base:]]
+
+        dprime_s, _ = dprime_per_cell(
+            Fp_block,
+            idx_base=surr_base_rel,
+            idx_drug=surr_drug_rel,
+            amplitude_mode=amplitude_mode,
+            var_floor=var_floor,
+            eps_var=eps_var,
+            clip_abs=None,
+        )
+        null_vals[s] = dprime_s
+
+    null_flat = null_vals.ravel()
+    null_flat = null_flat[np.isfinite(null_flat)]
+    thr = float(np.percentile(np.abs(null_flat), null_percentile)) if null_flat.size else np.nan
+
+    np.save(str(thresh_path), np.array(thr, dtype=np.float32))
+    np.save(str(null_path),   null_vals.astype(np.float32))
+
+    print(f"✅ {expt_ID}: d′ IAAFT null done | n_surr={n_surrogates} "
+          f"n_cells={n_sample} | thr(p{ptag})=±{thr:.4f}")
+
+    del Fp, Fp_block, null_vals
+    gc.collect()
+
+    return {"fish": fish, "status": "ok", "thresh": thr}
+
+
+# ============================================================
+# PHASIC RESPONDER INDICES (threshold real d′ against IAAFT null)
+# ============================================================
+
+def save_dprime_responder_idx(
+    fish,
+    dir_analysis,
+    amplitude_mode="raw",
+    null_percentile=95,
+    overwrite=True,
+):
+    """
+    Classify cells as positive/negative phasic responders by comparing
+    each cell's real d′ against the symmetric IAAFT null threshold.
+
+    Writes to dir_analysis / proj_ID / expt_ID /:
+        phasic_pos_dprime_iaaft_nullp{P}_idxs.npy
+        phasic_neg_dprime_iaaft_nullp{P}_idxs.npy
+
+    Returns
+    -------
+    dict with fish, status, n_pos, n_neg, thresh.
+    """
+    proj_ID, expt_ID = fish
+    out_dir = fish_dir(dir_analysis, fish)
+    ptag = int(null_percentile)
+
+    dprime_path = out_dir / f"phasic_dprime_cells_{amplitude_mode}.npy"
+    thresh_path = out_dir / f"phasic_dprime_iaaft_nullp{ptag}_thresh.npy"
+    pos_path    = out_dir / f"phasic_pos_dprime_iaaft_nullp{ptag}_idxs.npy"
+    neg_path    = out_dir / f"phasic_neg_dprime_iaaft_nullp{ptag}_idxs.npy"
+
+    if not overwrite and pos_path.exists() and neg_path.exists():
+        print(f"⏩ {expt_ID}: d′ responder idx exist, skipping.")
+        return {"fish": fish, "status": "skipped"}
+
+    if not dprime_path.exists():
+        raise FileNotFoundError(f"Missing d′ cells for {expt_ID}: {dprime_path}")
+    if not thresh_path.exists():
+        raise FileNotFoundError(
+            f"Missing IAAFT threshold for {expt_ID}: {thresh_path}\n"
+            "Run iaaft_null_dprime_one_fish() first."
+        )
+
+    dprime_cells = np.load(str(dprime_path))
+    thr = float(np.load(str(thresh_path)))
+
+    pos_idx = np.where(dprime_cells > thr)[0].astype(np.int64)
+    neg_idx = np.where(dprime_cells < -thr)[0].astype(np.int64)
+
+    np.save(str(pos_path), pos_idx)
+    np.save(str(neg_path), neg_idx)
+
+    n_cells = dprime_cells.size
+    print(
+        f"✅ {expt_ID}: d′ responders | thr=±{thr:.4f} | "
+        f"POS {pos_idx.size} ({pos_idx.size/n_cells*100:.2f}%) "
+        f"NEG {neg_idx.size} ({neg_idx.size/n_cells*100:.2f}%)"
+    )
+
+    return {
+        "fish": fish, "status": "ok",
+        "n_pos": int(pos_idx.size), "n_neg": int(neg_idx.size),
+        "thresh": thr,
+    }

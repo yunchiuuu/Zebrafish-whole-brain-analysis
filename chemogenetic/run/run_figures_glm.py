@@ -1,27 +1,23 @@
 """
-run_figures.py
-==============
-Orchestrate all group-comparison figures for one config.
+run_figures_glm.py
+===================
+Orchestrate GLM group-comparison figures for one config.
 
-This is the only run code that compares ctrl vs expt fish — it reads
-already-computed results from dir_analysis and passes them to the
-visualization modules. No computation happens here beyond loading.
+Stages:
+    A. Per-fish responder vs non-responder mean traces (tonic + phasic)
+    B. Responder fraction boxplot   — 4-box [CTRL(+),EXPT(+),CTRL(-),EXPT(-)]
+    C. ΔZ amplitude boxplot          — same layout, fixed-window effect size
 
-Stages (all togglable):
-    A. Per-fish trace plots      — tonic/phasic z-score per fish
-    B. Responder fraction        — fraction pos/neg cells per group
-    C. Fixed-window ΔZ boxplot   — mean ΔZ per fish, ctrl vs expt
-    D. Plateau ΔZ boxplot        — mean plateau ΔZ per fish
-    E. Phasic d′ boxplot         — mean d′ per fish by responder sign
-    F. Tonic ΔZ vs phasic d′     — cross-modal scatter
+B and C compute directly from f_tonic.npy + responder idx files (no cache
+dependency) — lifted from the notebook's "Plot Box Plot comparing the
+fraction of Tonic pos./neg responders" and "Quantify Amplitude Change" cells.
 
 Usage
 -----
-    python run_figures.py
-    # (not typically sbatch'd — fast, no heavy compute)
+    python run_figures_glm.py --config config_hcrt_trpv1_csn_120min
 
 Location:
-    ~/Zebrafish-whole-brain-analysis/chemogenetic/run/run_figures.py
+    ~/zwba/chemogenetic/run/run_figures_glm.py
 """
 
 import argparse
@@ -29,7 +25,11 @@ import importlib
 import sys
 from pathlib import Path
 
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
 import numpy as np
+from scipy.stats import mannwhitneyu
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
@@ -41,7 +41,6 @@ args, _ = parser.parse_known_args()
 
 cfg = importlib.import_module(f"chemogenetic.config.{args.config}")
 
-all_fish              = cfg.all_fish
 COMPARISON_TAG        = cfg.COMPARISON_TAG
 comparison_fig_dir    = cfg.comparison_fig_dir
 baseline_end          = cfg.baseline_end
@@ -54,52 +53,119 @@ drug_end              = cfg.drug_end
 drug_start            = cfg.drug_start
 expt_fish             = cfg.expt_fish
 EXPT_TAG              = cfg.EXPT_TAG
-L_MIN                 = cfg.L_MIN
 NULL_TAG              = cfg.NULL_TAG
-param_folder_name     = cfg.param_folder_name
 PLOT_META             = cfg.PLOT_META
 RESPONDER_NULL_THRESH = cfg.RESPONDER_NULL_THRESH
 sampling_rate_hz      = cfg.sampling_rate_hz
-from chemogenetic.responders_effectsize import (
-    frames_to_min_pair,
-    _dz_output_paths,
-    _load_responder_idx,
-)
-from utils.data_io import fish_dir
 
-from chemogenetic.population import (
-    plot_responder_fractions,
-    plot_dz_boxplot,
-    plot_plateau_dz_boxplot,
-    plot_dprime_boxplot,
-)
-from chemogenetic.scatter import plot_tonic_phasic_scatter
+from utils.data_io import fish_dir
 
 # ============================================================
 # STAGE TOGGLES
 # ============================================================
-RUN_TRACES      = True
-RUN_FRACTIONS   = True
-RUN_FIXED_DZ    = True
-RUN_PLATEAU_DZ  = True
-RUN_DPRIME      = True
-RUN_SCATTER     = True
+RUN_TRACES     = False   # disabled — F_phasic panel reused tonic responder idx,
+                          # which conflates tonic and phasic classification.
+                          # Re-enable once phasic/dprime responders are computed
+                          # and cross-modal (tonic x phasic) categories are designed.
+RUN_FRACTIONS  = True
+RUN_DZ         = True
 
-SHOW_PLOTS      = False   # True for interactive; False for headless sbatch
-SAVE_PLOTS      = True
-AMPLITUDE_MODE  = "raw"
+SHOW_PLOTS = False
+SAVE_PLOTS = True
 
 # ============================================================
 # SHARED SETUP
 # ============================================================
-BASELINE_MIN = frames_to_min_pair(baseline_start, baseline_end, sampling_rate_hz)
-DRUG_MIN     = frames_to_min_pair(drug_start,     drug_end,     sampling_rate_hz)
+def frames_to_min_pair(start_frame, end_frame, sr_hz):
+    return (float(start_frame) / sr_hz / 60.0, float(end_frame) / sr_hz / 60.0)
 
-ctrl_meta = PLOT_META[CTRL_TAG]
-expt_meta = PLOT_META[EXPT_TAG]
+def minutes_to_frames(min_pair, sr_hz, Tfull):
+    s = int(round(min_pair[0] * 60 * sr_hz))
+    e = int(round(min_pair[1] * 60 * sr_hz))
+    return int(np.clip(s, 0, Tfull)), int(np.clip(e, 0, Tfull))
 
-# Shared figure output dir (project-level)
+# Apply 20-min offset to each epoch (skip habituation transient), matching dprime offset_sec=20*60.
+OFFSET_MIN   = 20.0
+_bl_start, _bl_end = frames_to_min_pair(baseline_start, baseline_end, sampling_rate_hz)
+_dr_start, _dr_end = frames_to_min_pair(drug_start,     drug_end,     sampling_rate_hz)
+BASELINE_MIN = (_bl_start + OFFSET_MIN, _bl_end)
+DRUG_MIN     = (_dr_start + OFFSET_MIN, _dr_end)
+
+ptag = int(RESPONDER_NULL_THRESH)
 FIG_DIR = comparison_fig_dir(dir_analysis, COMPARISON_TAG)
+
+
+def _load_responder_idx(fish):
+    f_dir = fish_dir(dir_analysis, fish)
+    pos_p = f_dir / f"tonic_pos_glm_{NULL_TAG}_nullp{ptag}_idxs.npy"
+    neg_p = f_dir / f"tonic_neg_glm_{NULL_TAG}_nullp{ptag}_idxs.npy"
+    if not pos_p.exists() or not neg_p.exists():
+        return None, None
+    return np.load(str(pos_p)), np.load(str(neg_p))
+
+
+def p_to_stars(p):
+    if not np.isfinite(p):
+        return "n/a"
+    if p < 1e-4: return "****"
+    if p < 1e-3: return "***"
+    if p < 1e-2: return "**"
+    if p < 5e-2: return "*"
+    return "ns"
+
+
+def add_sig(ax, x1, x2, y, p):
+    ax.plot([x1, x1, x2, x2], [y, y * 1.04, y * 1.04, y], lw=1.5, color="black")
+    ax.text((x1 + x2) / 2, y * 1.06, f"{p_to_stars(p)} (p={p:.3g})",
+             ha="center", va="bottom")
+
+
+def _box_4group(data, labels, box_groups, ylabel, title, p_pos, p_neg, out_path):
+    fig, ax = plt.subplots(figsize=(6.6, 4.6))
+    ax.axhline(0, linestyle="--", linewidth=1.2, color="black", alpha=0.4, zorder=0)
+
+    positions = [0, 1, 2, 3]
+    bp = ax.boxplot(
+        data, positions=positions, widths=0.55, patch_artist=True,
+        showfliers=False,
+        medianprops=dict(color="black", linewidth=2),
+        whiskerprops=dict(color="black", linewidth=1.5),
+        capprops=dict(color="black", linewidth=1.5),
+    )
+    for patch, gname in zip(bp["boxes"], box_groups):
+        meta = PLOT_META[gname]
+        patch.set_facecolor(meta["color"])
+        patch.set_alpha(meta["alpha"])
+        patch.set_edgecolor("black")
+        patch.set_linewidth(1.5)
+
+    rng = np.random.default_rng(0)
+    for x0, vals, gname in zip(positions, data, box_groups):
+        meta = PLOT_META[gname]
+        x = x0 + rng.uniform(-0.12, 0.12, size=len(vals))
+        ax.scatter(x, vals, s=38, color=meta["color"], alpha=max(meta["alpha"], 0.85),
+                   edgecolor="black", linewidth=0.5, zorder=3)
+
+    ax.set_xticks(positions)
+    ax.set_xticklabels(labels)
+    ax.set_ylabel(ylabel)
+    ax.set_title(title)
+
+    y_all = np.concatenate([d for d in data if len(d) > 0])
+    ymax, ymin = float(np.nanmax(y_all)), float(np.nanmin(y_all))
+    yrng = (ymax - ymin) if ymax > ymin else 1.0
+
+    add_sig(ax, 0, 1, ymax + 0.10 * yrng, p_pos)
+    add_sig(ax, 2, 3, ymax + 0.28 * yrng, p_neg)
+    ax.margins(y=0.25)
+    plt.tight_layout()
+
+    if SAVE_PLOTS:
+        fig.savefig(str(out_path), dpi=200, bbox_inches="tight")
+        print(f"  ✅ Saved: {out_path}")
+    if SHOW_PLOTS:
+        plt.show()
+    plt.close(fig)
 
 
 # ============================================================
@@ -108,20 +174,12 @@ FIG_DIR = comparison_fig_dir(dir_analysis, COMPARISON_TAG)
 
 BL_START_VOL = 1200   # vol 20 min — skip habituation transient
 
-def _plot_responder_mean_traces(fish, group_tag, fig_dir, save=True, show=False):
+def _plot_responder_mean_traces(fish, group_tag):
     """
-    Plot mean z-scored F_tonic and F_phasic traces split by GLM responder category:
-        - Positive responders (activated by HCRT)   — red
-        - Negative responders (suppressed by HCRT)  — blue
-        - Non-responders                             — gray
-
-    Z-score per cell uses baseline vols BL_START_VOL:baseline_end.
+    Plot mean z-scored F_tonic and F_phasic traces split by GLM responder
+    category: positive (red), negative (blue), non-responder (gray).
     Saves one PNG per fish.
     """
-    import matplotlib
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-
     proj_ID, expt_ID = fish
     base_dir = fish_dir(dir_analysis, fish)
 
@@ -131,11 +189,8 @@ def _plot_responder_mean_traces(fish, group_tag, fig_dir, save=True, show=False)
         print(f"  ⚠️  {expt_ID}: f_tonic/f_phasic missing — skipping trace plot")
         return
 
-    try:
-        pos_idx, neg_idx, _, _ = _load_responder_idx(
-            base_dir, NULL_TAG, RESPONDER_NULL_THRESH,
-        )
-    except FileNotFoundError:
+    pos_idx, neg_idx = _load_responder_idx(fish)
+    if pos_idx is None:
         print(f"  ⚠️  {expt_ID}: responder idx missing — skipping trace plot")
         return
 
@@ -144,19 +199,18 @@ def _plot_responder_mean_traces(fish, group_tag, fig_dir, save=True, show=False)
     n_cells, T = Ft.shape
     t_min = np.arange(T) / (60 * sampling_rate_hz)
 
-    # non-responders = all cells minus pos and neg
     resp_all = np.union1d(pos_idx, neg_idx)
     all_idx  = np.arange(n_cells)
     non_idx  = np.setdiff1d(all_idx, resp_all)
 
     def _zscore_group(arr, idx):
-        """Z-score each cell on baseline then take mean ± SEM."""
         if idx.size == 0:
             return None, None
         sub = arr[idx]
         mu  = sub[:, BL_START_VOL:int(baseline_end)].mean(axis=1, keepdims=True)
         sg  = sub[:, BL_START_VOL:int(baseline_end)].std(axis=1, keepdims=True).clip(1e-6)
         z   = (sub - mu) / sg
+        z   = np.clip(z, -CLIP_ABS_DZ, CLIP_ABS_DZ)   # guard against near-zero σ outliers
         mean = z.mean(axis=0)
         sem  = z.std(axis=0) / np.sqrt(idx.size)
         return mean, sem
@@ -172,8 +226,7 @@ def _plot_responder_mean_traces(fish, group_tag, fig_dir, save=True, show=False)
                  fontsize=11, fontweight="bold")
 
     for ax, arr, ylabel, title in zip(
-        axes,
-        [Ft, Fp],
+        axes, [Ft, Fp],
         ["F_tonic (z-score)", "F_phasic (z-score)"],
         ["F_tonic", "F_phasic"],
     ):
@@ -202,189 +255,167 @@ def _plot_responder_mean_traces(fish, group_tag, fig_dir, save=True, show=False)
     fish_fig_dir = base_dir / "figures"
     fish_fig_dir.mkdir(parents=True, exist_ok=True)
     out = fish_fig_dir / "responder_mean_traces.png"
-    if save:
+    if SAVE_PLOTS:
         fig.savefig(str(out), dpi=150, bbox_inches="tight")
         print(f"  ✅ {expt_ID} → {out.name}")
-    if show:
+    if SHOW_PLOTS:
         plt.show()
     plt.close(fig)
-
     del Ft, Fp
 
-def _load_responder_fractions(fish_list):
-    """Return (pos_fracs, neg_fracs) as arrays of per-fish fractions."""
-    pos_fracs, neg_fracs = [], []
+
+# ============================================================
+# STAGE B: RESPONDER FRACTION BOXPLOT
+# ============================================================
+
+def compute_group_fractions(fish_list, group_name):
+    out_pos, out_neg = [], []
     for fish in fish_list:
-        proj_ID, expt_ID = fish
-        base_dir = fish_dir(dir_analysis, fish)
-        Ft_path  = base_dir / "f_tonic.npy"
-        if not Ft_path.exists():
+        pos_idx, neg_idx = _load_responder_idx(fish)
+        if pos_idx is None:
+            print(f"  ⚠️  {fish[1]}: responder idx missing — skipping")
             continue
-        Ft = np.load(str(Ft_path), mmap_mode="r")
-        n_cells = Ft.shape[0]
-        try:
-            pos_idx, neg_idx, _, _ = _load_responder_idx(
-                base_dir, NULL_TAG, RESPONDER_NULL_THRESH,
-            )
-            pos_fracs.append(pos_idx.size / n_cells)
-            neg_fracs.append(neg_idx.size / n_cells)
-        except FileNotFoundError:
-            pass
-    return np.array(pos_fracs, dtype=float), np.array(neg_fracs, dtype=float)
-
-
-def _load_fixed_dz(fish_list):
-    """Return (pos_means, neg_means) — one per-fish mean ΔZ per group."""
-    pos_means, neg_means = [], []
-    for fish in fish_list:
-        proj_ID, expt_ID = fish
-        cache_root = Path(dir_analysis) / proj_ID / "results_dz_vectors"
-        fish_cache = cache_root / expt_ID
-        pos_p, neg_p = _dz_output_paths(
-            fish_cache, NULL_TAG, RESPONDER_NULL_THRESH,
-            BASELINE_MIN, DRUG_MIN, CLIP_ABS_DZ,
-        )
-        if pos_p.exists() and neg_p.exists():
-            dz_pos = np.load(str(pos_p))
-            dz_neg = np.load(str(neg_p))
-            if dz_pos.size > 0:
-                pos_means.append(float(np.nanmean(dz_pos)))
-            if dz_neg.size > 0:
-                neg_means.append(float(np.nanmean(dz_neg)))
-    return np.array(pos_means, dtype=float), np.array(neg_means, dtype=float)
-
-
-def _load_plateau_dz(fish_list):
-    """Return (pos_means, neg_means) from saved plateau ΔZ files."""
-    pos_means, neg_means = [], []
-    Ltag = f"{int(round(L_MIN))}min"
-    nt   = f"_{NULL_TAG}"
-    ptag = int(RESPONDER_NULL_THRESH)
-    for fish in fish_list:
-        base_dir = fish_dir(dir_analysis, fish)
-        pos_p = base_dir / f"tonic_pos_plateauDz{nt}_L{Ltag}_nullp{ptag}.npy"
-        neg_p = base_dir / f"tonic_neg_plateauDz{nt}_L{Ltag}_nullp{ptag}.npy"
-        if pos_p.exists() and neg_p.exists():
-            dz_pos = np.load(str(pos_p))
-            dz_neg = np.load(str(neg_p))
-            if dz_pos.size > 0:
-                pos_means.append(float(np.nanmean(dz_pos)))
-            if dz_neg.size > 0:
-                neg_means.append(float(np.nanmean(dz_neg)))
-    return np.array(pos_means, dtype=float), np.array(neg_means, dtype=float)
-
-
-def _load_dprime_by_sign(fish_list):
-    """
-    Return (pos_means, neg_means): per-fish mean d′ restricted to
-    tonic pos / neg responder cells.
-    """
-    pos_means, neg_means = [], []
-    ptag = int(RESPONDER_NULL_THRESH)
-    for fish in fish_list:
-        base_dir = fish_dir(dir_analysis, fish)
-        dp_path  = base_dir / f"phasic_dprime_cells_{AMPLITUDE_MODE}.npy"
-        if not dp_path.exists():
+        f_dir = fish_dir(dir_analysis, fish)
+        ft_path = f_dir / "f_tonic.npy"
+        if not ft_path.exists():
             continue
-        try:
-            pos_idx, neg_idx, _, _ = _load_responder_idx(
-                base_dir, NULL_TAG, RESPONDER_NULL_THRESH,
-            )
-        except FileNotFoundError:
+        n_cells = np.load(str(ft_path), mmap_mode="r").shape[0]
+        pos_frac = pos_idx.size / n_cells
+        neg_frac = neg_idx.size / n_cells
+        out_pos.append(pos_frac)
+        out_neg.append(neg_frac)
+        print(f"  {fish[1]} [{group_name}] n_cells={n_cells} "
+              f"POS {pos_idx.size} ({pos_frac*100:.2f}%) "
+              f"NEG {neg_idx.size} ({neg_frac*100:.2f}%)")
+    return np.array(out_pos, dtype=np.float32), np.array(out_neg, dtype=np.float32)
+
+
+def plot_responder_fraction(pos_ctrl, neg_ctrl, pos_expt, neg_expt):
+    if any(len(x) == 0 for x in [pos_ctrl, neg_ctrl, pos_expt, neg_expt]):
+        print("⚠️  Not enough data for responder fraction plot — skipping")
+        return
+    p_pos = mannwhitneyu(pos_expt, pos_ctrl, alternative="greater").pvalue
+    p_neg = mannwhitneyu(neg_expt, neg_ctrl, alternative="greater").pvalue
+
+    _box_4group(
+        data=[pos_ctrl, pos_expt, neg_ctrl, neg_expt],
+        labels=[
+            f"{PLOT_META[CTRL_TAG]['label']} (+)",
+            f"{PLOT_META[EXPT_TAG]['label']} (+)",
+            f"{PLOT_META[CTRL_TAG]['label']} (−)",
+            f"{PLOT_META[EXPT_TAG]['label']} (−)",
+        ],
+        box_groups=[CTRL_TAG, EXPT_TAG, CTRL_TAG, EXPT_TAG],
+        ylabel="Fraction tonic responders per fish",
+        title=f"Pos./Neg. Tonic GLM Responders Fraction "
+              f"(ΔR² > pr{RESPONDER_NULL_THRESH} {NULL_TAG}-null)",
+        p_pos=p_pos, p_neg=p_neg,
+        out_path=FIG_DIR / f"glm_responder_fraction_{NULL_TAG}_p{ptag}.png",
+    )
+    print(f"  POS fraction MWU ({EXPT_TAG} > {CTRL_TAG}): p = {p_pos:.3e}")
+    print(f"  NEG fraction MWU ({EXPT_TAG} > {CTRL_TAG}): p = {p_neg:.3e}")
+
+
+# ============================================================
+# STAGE C: ΔZ AMPLITUDE BOXPLOT (fixed-window effect size)
+# ============================================================
+
+def compute_group_dz(fish_list, group_name):
+    out_pos, out_neg = [], []
+    for fish in fish_list:
+        pos_idx, neg_idx = _load_responder_idx(fish)
+        if pos_idx is None:
+            print(f"  ⚠️  {fish[1]}: responder idx missing — skipping")
             continue
-        dp = np.load(str(dp_path))
-        if pos_idx.size > 0:
-            pos_means.append(float(np.nanmean(dp[pos_idx])))
-        if neg_idx.size > 0:
-            neg_means.append(float(np.nanmean(dp[neg_idx])))
-    return np.array(pos_means, dtype=float), np.array(neg_means, dtype=float)
+        f_dir = fish_dir(dir_analysis, fish)
+        ft_path = f_dir / "f_tonic.npy"
+        if not ft_path.exists():
+            continue
+
+        Ft = np.load(str(ft_path), mmap_mode="r")
+        n_cells, Tfull = Ft.shape
+        b0, b1 = minutes_to_frames(BASELINE_MIN, sampling_rate_hz, Tfull)
+        d0, d1 = minutes_to_frames(DRUG_MIN,     sampling_rate_hz, Tfull)
+
+        pos_idx = pos_idx[(pos_idx >= 0) & (pos_idx < n_cells)]
+        neg_idx = neg_idx[(neg_idx >= 0) & (neg_idx < n_cells)]
+
+        def _dz_for(idxs):
+            if idxs.size == 0:
+                return np.nan
+            sub = np.asarray(Ft[idxs, :], dtype=np.float32)
+            mu_b = sub[:, b0:b1].mean(axis=1)
+            sd_b = sub[:, b0:b1].std(axis=1)
+            mu_d = sub[:, d0:d1].mean(axis=1)
+            dz = (mu_d - mu_b) / (sd_b + 1e-6)
+            dz = np.clip(dz, -CLIP_ABS_DZ, CLIP_ABS_DZ)
+            dz = dz[np.isfinite(dz)]
+            return float(dz.mean()) if dz.size else np.nan
+
+        dz_pos = _dz_for(pos_idx)
+        dz_neg = _dz_for(neg_idx)
+        if np.isfinite(dz_pos):
+            out_pos.append(dz_pos)
+        if np.isfinite(dz_neg):
+            out_neg.append(dz_neg)
+        print(f"  {fish[1]} [{group_name}] ΔZ(+)={dz_pos:.3f}  ΔZ(−)={dz_neg:.3f}")
+        del Ft
+
+    return np.array(out_pos, dtype=np.float32), np.array(out_neg, dtype=np.float32)
+
+
+def plot_dz_amplitude(dz_pos_ctrl, dz_neg_ctrl, dz_pos_expt, dz_neg_expt):
+    if any(len(x) == 0 for x in [dz_pos_ctrl, dz_neg_ctrl, dz_pos_expt, dz_neg_expt]):
+        print("⚠️  Not enough data for ΔZ amplitude plot — skipping")
+        return
+    p_pos = mannwhitneyu(dz_pos_expt, dz_pos_ctrl, alternative="greater").pvalue
+    p_neg = mannwhitneyu(dz_neg_expt, dz_neg_ctrl, alternative="less").pvalue
+
+    _box_4group(
+        data=[dz_pos_ctrl, dz_pos_expt, dz_neg_ctrl, dz_neg_expt],
+        labels=[
+            f"{PLOT_META[CTRL_TAG]['label']} (+)",
+            f"{PLOT_META[EXPT_TAG]['label']} (+)",
+            f"{PLOT_META[CTRL_TAG]['label']} (−)",
+            f"{PLOT_META[EXPT_TAG]['label']} (−)",
+        ],
+        box_groups=[CTRL_TAG, EXPT_TAG, CTRL_TAG, EXPT_TAG],
+        ylabel="ΔZ (fixed-window effect size)",
+        title=f"Tonic pos./neg. responder ΔZ | base {BASELINE_MIN[0]:.0f}-"
+              f"{BASELINE_MIN[1]:.0f}min drug {DRUG_MIN[0]:.0f}-{DRUG_MIN[1]:.0f}min",
+        p_pos=p_pos, p_neg=p_neg,
+        out_path=FIG_DIR / f"glm_dz_amplitude_{NULL_TAG}_p{ptag}.png",
+    )
+    print(f"  ΔZ(+) MWU ({EXPT_TAG} > {CTRL_TAG}): p = {p_pos:.3e}")
+    print(f"  ΔZ(−) MWU ({EXPT_TAG} < {CTRL_TAG}): p = {p_neg:.3e}")
 
 
 # ============================================================
 # MAIN
 # ============================================================
 def main():
-    print(f"run_figures | null={NULL_TAG} p{RESPONDER_NULL_THRESH} | fig_dir={FIG_DIR}")
+    print(f"run_figures_glm | null={NULL_TAG} p{RESPONDER_NULL_THRESH} | fig_dir={FIG_DIR}")
 
-    # ── A: Responder vs non-responder mean traces ─────────────
     if RUN_TRACES:
         print("\n── A: Responder vs non-responder mean traces ────────────")
         for fish in ctrl_fish:
-            _plot_responder_mean_traces(fish, CTRL_TAG,
-                                        FIG_DIR, save=SAVE_PLOTS, show=SHOW_PLOTS)
+            _plot_responder_mean_traces(fish, CTRL_TAG)
         for fish in expt_fish:
-            _plot_responder_mean_traces(fish, EXPT_TAG,
-                                        FIG_DIR, save=SAVE_PLOTS, show=SHOW_PLOTS)
+            _plot_responder_mean_traces(fish, EXPT_TAG)
 
-    # ── B: Responder fractions ────────────────────────────────
     if RUN_FRACTIONS:
-        print("\n── B: Responder fractions ───────────────────────────────")
-        ctrl_pos_f, ctrl_neg_f = _load_responder_fractions(ctrl_fish)
-        expt_pos_f, expt_neg_f = _load_responder_fractions(expt_fish)
-        plot_responder_fractions(
-            ctrl_pos_f, ctrl_neg_f, expt_pos_f, expt_neg_f,
-            ctrl_meta, expt_meta,
-            null_tag=NULL_TAG, null_percentile=RESPONDER_NULL_THRESH,
-            fig_dir=FIG_DIR, save=SAVE_PLOTS, show=SHOW_PLOTS,
-        )
+        print("\n── B: Responder fraction boxplot ────────────────────────")
+        pos_ctrl, neg_ctrl = compute_group_fractions(ctrl_fish, CTRL_TAG)
+        pos_expt, neg_expt = compute_group_fractions(expt_fish, EXPT_TAG)
+        plot_responder_fraction(pos_ctrl, neg_ctrl, pos_expt, neg_expt)
 
-    # ── C: Fixed-window ΔZ ───────────────────────────────────
-    if RUN_FIXED_DZ:
-        print("\n── C: Fixed-window ΔZ boxplot ───────────────────────────")
-        ctrl_pos_dz, ctrl_neg_dz = _load_fixed_dz(ctrl_fish)
-        expt_pos_dz, expt_neg_dz = _load_fixed_dz(expt_fish)
-        plot_dz_boxplot(
-            ctrl_pos_dz, ctrl_neg_dz, expt_pos_dz, expt_neg_dz,
-            ctrl_meta, expt_meta,
-            null_tag=NULL_TAG, null_percentile=RESPONDER_NULL_THRESH,
-            baseline_min_pair=BASELINE_MIN, drug_min_pair=DRUG_MIN,
-            fig_dir=FIG_DIR, save=SAVE_PLOTS, show=SHOW_PLOTS,
-        )
+    if RUN_DZ:
+        print("\n── C: ΔZ amplitude boxplot ───────────────────────────────")
+        dzp_ctrl, dzn_ctrl = compute_group_dz(ctrl_fish, CTRL_TAG)
+        dzp_expt, dzn_expt = compute_group_dz(expt_fish, EXPT_TAG)
+        plot_dz_amplitude(dzp_ctrl, dzn_ctrl, dzp_expt, dzn_expt)
 
-    # ── D: Plateau ΔZ ────────────────────────────────────────
-    if RUN_PLATEAU_DZ:
-        print("\n── D: Plateau ΔZ boxplot ────────────────────────────────")
-        ctrl_pos_pdz, ctrl_neg_pdz = _load_plateau_dz(ctrl_fish)
-        expt_pos_pdz, expt_neg_pdz = _load_plateau_dz(expt_fish)
-        plot_plateau_dz_boxplot(
-            ctrl_pos_pdz, ctrl_neg_pdz, expt_pos_pdz, expt_neg_pdz,
-            ctrl_meta, expt_meta,
-            null_tag=NULL_TAG, null_percentile=RESPONDER_NULL_THRESH,
-            L_min=L_MIN,
-            fig_dir=FIG_DIR, save=SAVE_PLOTS, show=SHOW_PLOTS,
-        )
-
-    # ── E: Phasic d′ ─────────────────────────────────────────
-    if RUN_DPRIME:
-        print("\n── E: Phasic d′ boxplot ─────────────────────────────────")
-        ctrl_pos_dp, ctrl_neg_dp = _load_dprime_by_sign(ctrl_fish)
-        expt_pos_dp, expt_neg_dp = _load_dprime_by_sign(expt_fish)
-        plot_dprime_boxplot(
-            ctrl_pos_dp, ctrl_neg_dp, expt_pos_dp, expt_neg_dp,
-            ctrl_meta, expt_meta,
-            amplitude_mode=AMPLITUDE_MODE,
-            fig_dir=FIG_DIR, save=SAVE_PLOTS, show=SHOW_PLOTS,
-        )
-
-    # ── F: Tonic ΔZ vs phasic d′ scatter ────────────────────
-    if RUN_SCATTER:
-        print("\n── F: Tonic ΔZ vs phasic d′ scatter ────────────────────")
-        ctrl_pos_dz, ctrl_neg_dz   = _load_fixed_dz(ctrl_fish)
-        expt_pos_dz, expt_neg_dz   = _load_fixed_dz(expt_fish)
-        ctrl_pos_dp, ctrl_neg_dp   = _load_dprime_by_sign(ctrl_fish)
-        expt_pos_dp, expt_neg_dp   = _load_dprime_by_sign(expt_fish)
-        plot_tonic_phasic_scatter(
-            ctrl_pos_dz, ctrl_pos_dp,
-            ctrl_neg_dz, ctrl_neg_dp,
-            expt_pos_dz, expt_pos_dp,
-            expt_neg_dz, expt_neg_dp,
-            ctrl_meta, expt_meta,
-            null_tag=NULL_TAG, null_percentile=RESPONDER_NULL_THRESH,
-            amplitude_mode=AMPLITUDE_MODE,
-            fig_dir=FIG_DIR, save=SAVE_PLOTS, show=SHOW_PLOTS,
-        )
-
-    print(f"\n✅ run_figures complete. Figures in: {FIG_DIR}")
+    print(f"\n✅ run_figures_glm complete. Figures in: {FIG_DIR}")
 
 
 if __name__ == "__main__":

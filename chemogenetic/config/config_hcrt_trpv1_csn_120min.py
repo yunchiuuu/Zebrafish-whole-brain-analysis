@@ -121,11 +121,11 @@ drift_global = 1                       # polynomial drift order
 lam_global   = 0.5                     # ridge penalty
 lag_global   = 0                       # causal lag (frames)
 
-INCLUDED_BASELINE = 15.0               # minutes of baseline in GLM window
+INCLUDED_BASELINE = 45.0               # minutes of baseline in GLM window
 CLIP_ABS_DZ       = 50.0               # |ΔZ| clipping threshold
 NULL_TAG          = "iaaft"            # "iaaft" or "shift"
 RESPONDER_NULL_THRESH = 95             # null percentile for responder cutoff
-L_MIN = 20.0                           # plateau duration (minutes) for plateau-ΔZ
+L_MIN = 10.0                           # plateau duration (minutes) for plateau-ΔZ
 
 # Derived: subfolder name for all GLM outputs (defined once, used everywhere)
 param_folder_name = (

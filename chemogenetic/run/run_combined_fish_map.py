@@ -71,8 +71,14 @@ METRICS = {
 # build ordered fish list with group tags
 # works for any config that has expt_fish + ctrl_fish, or just expt_fish
 FISH_GROUPS = []
+
+# ctrl fish always come first
+if hasattr(cfg, "ctrl_fish"):
+    for fish in cfg.ctrl_fish:
+        FISH_GROUPS.append((fish, cfg.CTRL_TAG))
+
 if hasattr(cfg, "expt_fish_csn") and hasattr(cfg, "expt_fish_csn_inj"):
-    # pooled config: separate the two cohorts
+    # pooled config: separate the two expt cohorts
     for fish in cfg.expt_fish_csn:
         FISH_GROUPS.append((fish, "HCRT-TRPV1 (main)"))
     for fish in cfg.expt_fish_csn_inj:

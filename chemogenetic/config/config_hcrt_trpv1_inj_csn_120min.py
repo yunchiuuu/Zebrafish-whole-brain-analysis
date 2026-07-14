@@ -112,21 +112,23 @@ n_resample_permutation = 500
 BH_Q = 0.05
 
 
+
 # ============================================================
 # TONIC GLM
 # ============================================================
-input_tag    = "C"
-K_global     = 600
-drift_global = 1
-lam_global   = 0.5
-lag_global   = 0
+input_tag    = "C"                     # "C" or "dC"
+K_global     = 600                     # kernel length (frames)
+drift_global = 1                       # polynomial drift order
+lam_global   = 0.5                     # ridge penalty
+lag_global   = 0                       # causal lag (frames)
 
-INCLUDED_BASELINE     = 15.0
-CLIP_ABS_DZ           = 50.0
-NULL_TAG              = "iaaft"
-RESPONDER_NULL_THRESH = 95
-L_MIN                 = 20.0
+INCLUDED_BASELINE = 45.0               # minutes of baseline in GLM window
+CLIP_ABS_DZ       = 50.0               # |ΔZ| clipping threshold
+NULL_TAG          = "iaaft"            # "iaaft" or "shift"
+RESPONDER_NULL_THRESH = 95             # null percentile for responder cutoff
+L_MIN = 10.0                           # plateau duration (minutes) for plateau-ΔZ
 
+# Derived: subfolder name for all GLM outputs (defined once, used everywhere)
 param_folder_name = (
     f"in{input_tag}_K{K_global}_drift{drift_global}_lam{lam_global}_lag{lag_global}"
 )

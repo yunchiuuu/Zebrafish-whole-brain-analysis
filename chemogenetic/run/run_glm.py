@@ -83,9 +83,9 @@ RUN_RESPONDERS = True
 # SETTINGS
 # ============================================================
 OVERWRITE_CV         = False
-OVERWRITE_REFIT      = False
-OVERWRITE_ABLATION   = False
-OVERWRITE_NULL       = False
+OVERWRITE_REFIT      = True
+OVERWRITE_ABLATION   = True
+OVERWRITE_NULL       = True
 OVERWRITE_RESPONDERS = True
 
 K_LIST        = (60, 120, 300, 600, 900, 1200)
