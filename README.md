@@ -2,7 +2,8 @@
 
 Analysis pipeline for whole-brain light-sheet GCaMP imaging in larval zebrafish
 
-Raw TIFF -> HDF5 -> voluseg cell segmentation (manual steps; not included)
+Raw TIFF -> HDF5 (manual steps; not included)
+-> voluseg cell segmentation (https://github.com/mikarubi/voluseg)
 -> ANTs registration to a shared template (included)
 -> tonic/phasic decomposition (included)
 -> GLM / d' responder statistics (included)
