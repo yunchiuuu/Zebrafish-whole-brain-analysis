@@ -1,10 +1,12 @@
 # Zebrafish whole-brain analysis (zwba)
 
 Analysis pipeline for whole-brain light-sheet GCaMP imaging in larval zebrafish
-(HCRT/orexin peptide vs. glutamate co-transmission; HCRT-TRPV1 + capsaicin, YNT185).
 
-Raw TIFF -> HDF5 -> voluseg cell segmentation -> ANTs registration to a shared
-template -> tonic/phasic decomposition -> GLM / d' responder statistics -> brain maps.
+Raw TIFF -> HDF5 -> voluseg cell segmentation (manual steps; not included)
+-> ANTs registration to a shared template (included)
+-> tonic/phasic decomposition (included)
+-> GLM / d' responder statistics (included)
+-> brain maps (included)
 
 ## Layout
 
