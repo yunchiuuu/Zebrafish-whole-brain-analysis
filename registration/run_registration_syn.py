@@ -4,19 +4,17 @@ run_registration_syn.py
 SyN registration of one fish to the shared mean brain, with QC overlay
 saved immediately after registration.
 
-Takes fish identity from the experiment config + CLI argument.
-The mean brain path comes from config_registration.py.
+--config is a MODULE NAME under registration/config/ (no folder, no .py), the
+same convention as the chemogenetic scripts. Fish list, imaging specs, template
+path and resampling all come from that one config.
 
 Usage (interactive):
     python registration/run_registration_syn.py \
-        --config chemogenetic/config/hcrt_trpv1_csn_120min.py \
+        --config config_registration \
         --expt_ID 251008_hcrt-trpv1_huc-h2b-g8m_csn_10uM_fish4
 
-Usage (sbatch one fish):
-    sbatch --cpus-per-task=16 --mem=64G --wrap="\
-        python registration/run_registration_syn.py \
-        --config chemogenetic/config/hcrt_trpv1_csn_120min.py \
-        --expt_ID 251008_hcrt-trpv1_huc-h2b-g8m_csn_10uM_fish4"
+Usage (sbatch all fish in the config; one job per fish):
+    bash registration/submit_registration_syn.sh --config config_registration
 
 Outputs per fish under {dir_registration}/{proj_ID}/{expt_ID}/:
     expt_to_mean_warp.nii.gz
@@ -24,15 +22,20 @@ Outputs per fish under {dir_registration}/{proj_ID}/{expt_ID}/:
     expt_to_mean_registered.nii.gz
     expt_to_mean_registered_final.nii.gz
     qc_registration_overlay.pdf
+    registration_meta.json   (template path + sha256, parameters, git commit)
 
 Location:
     ~/Zebrafish-whole-brain-analysis/registration/run_registration_syn.py
 """
 
 import argparse
-import importlib.util
+import datetime
+import hashlib
+import importlib
+import json
 import multiprocessing
 import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -56,6 +59,7 @@ import ants
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from registration import (
+    SYN_PARAMS,
     load_volume_mean,
     syn_registration,
 )
@@ -71,7 +75,8 @@ parser = argparse.ArgumentParser(
 )
 parser.add_argument(
     "--config", required=True,
-    help="Path to experiment config .py (e.g. chemogenetic/config/hcrt_trpv1_csn_120min.py)"
+    help="Config MODULE NAME under registration/config/, no folder and no .py "
+         "(e.g. config_registration)"
 )
 parser.add_argument(
     "--expt_ID", required=True,
@@ -80,13 +85,17 @@ parser.add_argument(
 args = parser.parse_args()
 
 # ============================================================
-# LOAD EXPERIMENT CONFIG DYNAMICALLY
+# LOAD CONFIG (module name, same convention as chemogenetic scripts)
 # ============================================================
 
-config_path = Path(args.config).resolve()
-spec = importlib.util.spec_from_file_location("expt_config", config_path)
-cfg  = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(cfg)
+if args.config.endswith(".py") or "/" in args.config:
+    raise ValueError(
+        f"--config must be a module name under registration/config/ "
+        f"(e.g. config_registration), not a path: {args.config!r}"
+    )
+
+sys.path.insert(0, str(Path(__file__).resolve().parent / "config"))
+cfg = importlib.import_module(args.config)
 
 # Resolve fish tuple from expt_ID
 expt_ID  = args.expt_ID
@@ -94,30 +103,25 @@ all_fish = cfg.all_fish
 fish     = next((f for f in all_fish if f[1] == expt_ID), None)
 if fish is None:
     raise ValueError(
-        f"{expt_ID} not found in all_fish from {config_path.name}.\n"
+        f"{expt_ID} not found in all_fish from {args.config}.\n"
         f"Available: {[f[1] for f in all_fish]}"
     )
 proj_ID = fish[0]
 
-# Imaging params from experiment config
-res_x      = cfg.res_x
-res_y      = cfg.res_y
-res_z      = cfg.res_z
-n_slices   = cfg.n_slices
-rotation_k = cfg.rotation_k
+# Everything below comes from the one config
+res_x            = cfg.res_x
+res_y            = cfg.res_y
+res_z            = cfg.res_z
+n_slices         = cfg.n_slices
+rotation_k       = cfg.rotation_k
+dir_voluseg      = cfg.dir_voluseg
+dir_registration = cfg.dir_registration
+MEAN_BRAIN_PATH  = cfg.MEAN_BRAIN_PATH
+target_spacing   = cfg.target_spacing
+TEMPLATE_VERSION = cfg.TEMPLATE_VERSION
 
-# ============================================================
-# LOAD REGISTRATION CONFIG
-# ============================================================
-
-sys.path.insert(0, str(Path(__file__).resolve().parent / "config"))
-from config_registration import (
-    dir_voluseg,
-    dir_registration,
-    MEAN_BRAIN_PATH,
-    target_spacing,
-    TEMPLATE_EXPT_ID,
-)
+# Affine initializer settings (recorded in registration_meta.json)
+AFFINE_INIT_PARAMS = dict(search_factor=20, radian_fraction=0.1)
 
 # ============================================================
 # HELPERS
@@ -226,7 +230,7 @@ moving_mask = ants.iMath(ants.get_mask(moving_norm, cleanup=True), "MD", 1)
 
 # Affine initializer
 init_tx = ants.affine_initializer(
-    fixed_norm, moving_norm, search_factor=20, radian_fraction=0.1
+    fixed_norm, moving_norm, **AFFINE_INIT_PARAMS
 )
 
 # SyN registration
@@ -268,5 +272,69 @@ save_qc_overlay(
     expt_ID=expt_ID,
     n_planes=10,
 )
+
+# ============================================================
+# PROVENANCE SIDECAR — what exactly this registration used
+# ============================================================
+
+def _sha256(path, chunk=1 << 20):
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for block in iter(lambda: f.read(chunk), b""):
+            h.update(block)
+    return h.hexdigest()
+
+
+def _git(*cmd):
+    """Run a git command in the repo root; return stripped stdout or None."""
+    try:
+        out = subprocess.run(
+            ["git", *cmd], cwd=Path(__file__).resolve().parents[1],
+            capture_output=True, text=True, check=True,
+        )
+        return out.stdout.strip()
+    except Exception:
+        return None
+
+
+def _jsonable(d):
+    """Tuples -> lists so the dict serializes cleanly."""
+    return {k: list(v) if isinstance(v, tuple) else v for k, v in d.items()}
+
+
+template_stat = os.stat(MEAN_BRAIN_PATH)
+git_status = _git("status", "--porcelain")
+meta = {
+    "expt_ID": expt_ID,
+    "proj_ID": proj_ID,
+    "registered_at_utc": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
+    "config_module": args.config,
+    "template": {
+        "version": TEMPLATE_VERSION,
+        "path": str(MEAN_BRAIN_PATH),
+        "sha256": _sha256(MEAN_BRAIN_PATH),
+        "size_bytes": template_stat.st_size,
+        "mtime_utc": datetime.datetime.fromtimestamp(
+            template_stat.st_mtime, datetime.timezone.utc
+        ).isoformat(timespec="seconds"),
+        "shape": list(fixed_atlas.shape),
+        "spacing": list(fixed_atlas.spacing),
+    },
+    "imaging": {
+        "res_x": res_x, "res_y": res_y, "res_z": res_z,
+        "n_slices": n_slices, "rotation_k": rotation_k,
+    },
+    "target_spacing": list(target_spacing),
+    "affine_init": AFFINE_INIT_PARAMS,
+    "syn": _jsonable(SYN_PARAMS),
+    "apply_transforms_interpolator": "welchWindowedSinc",
+    "git_commit": _git("rev-parse", "HEAD"),
+    "git_dirty": bool(git_status) if git_status is not None else None,
+    "ants_version": getattr(ants, "__version__", None),
+}
+meta_path = os.path.join(out_dir, "registration_meta.json")
+with open(meta_path, "w") as f:
+    json.dump(meta, f, indent=2)
+print(f"✅ Registration metadata saved: {meta_path}")
 
 print(f"\n=== Registration complete: {expt_ID} ===")

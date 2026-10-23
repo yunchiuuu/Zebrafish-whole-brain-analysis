@@ -388,6 +388,19 @@ def affine_registration(moving_norm, fixed_norm, dir_ants_output, file_name):
     return save_path
 
 
+# SyN settings, defined once so run_registration_syn.py can record exactly what
+# was used in each fish's registration_meta.json.
+SYN_PARAMS = dict(
+    type_of_transform="SyNRA",
+    aff_metric="MI",
+    syn_metric="CC",
+    shrink_factors=(8, 4, 2, 1),
+    smoothing_sigmas=(3, 2, 1, 0),
+    reg_iterations=(120, 80, 40, 0),
+    interpolator="linear",
+)
+
+
 def syn_registration(
     moving_norm, fixed_norm, dir_ants_output,
     file_name_warp, file_name_affine, file_name_syn_registration,
@@ -395,6 +408,7 @@ def syn_registration(
 ):
     """
     SyNRA registration (affine MI + SyN CC) with masks and initial transform.
+    Settings come from SYN_PARAMS above.
 
     Returns
     -------
@@ -404,13 +418,7 @@ def syn_registration(
     result = ants.registration(
         moving=moving_norm,
         fixed=fixed_norm,
-        type_of_transform="SyNRA",
-        aff_metric="MI",
-        syn_metric="CC",
-        shrink_factors=(8, 4, 2, 1),
-        smoothing_sigmas=(3, 2, 1, 0),
-        reg_iterations=(120, 80, 40, 0),
-        interpolator="linear",
+        **SYN_PARAMS,
         mask=fixed_mask,
         moving_mask=moving_mask,
         initial_transform=init_tx,

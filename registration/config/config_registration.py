@@ -39,8 +39,14 @@ dir_registration = Path("/resnick/groups/Proberlab/yun/lightsheet/analysis_outpu
 # ============================================================
 # Updated to use the 300 µm Zstack-derived mean template brain
 # (3-fish average: 260707_fish2 fixed + 260707_fish1 + 260708_fish1 warped).
-MEAN_BRAIN_FNAME  = "template_mean_brain.nii.gz"
-MEAN_BRAIN_PATH   = str(dir_registration / "template_mean_brain.nii.gz")
+# The template filename is versioned. Bump TEMPLATE_VERSION whenever the template
+# is regenerated, so warps registered to an older template can be told apart
+# (each fish's registration_meta.json records the template path + sha256).
+# generate_template.py, run_registration_syn.py, run_medoids.py and
+# register_mapzebrain_to_template.py all derive the filename from here.
+TEMPLATE_VERSION  = "zstack_v1"
+MEAN_BRAIN_FNAME  = f"template_mean_brain_{TEMPLATE_VERSION}.nii.gz"
+MEAN_BRAIN_PATH   = str(dir_registration / MEAN_BRAIN_FNAME)
 
 # Template fish used as fixed reference for all SyN registrations.
 # TEMPLATE_EXPT_ID is used by run_registration_syn.py to auto-gitgenerate
