@@ -75,7 +75,7 @@ FIXED_KEY = "fish2"
 TEMPLATE_DIR = BASE / "zstack_template"
 
 # Voxel spacing for 300 µm Zstacks
-RES_X, RES_Y, RES_Z = 1.52, 1.52, 7.5
+RES_X, RES_Y, RES_Z = 1.52, 1.52, 6.25
 ROTATION_K = 2
 
 # Isotropic target spacing for registration (match your config_registration)
