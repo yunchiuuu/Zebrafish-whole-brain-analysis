@@ -14,7 +14,7 @@
 
 SCRIPT="registration/run_registration_syn.py"
 CPUS=32
-MEM="256G"
+MEM="24G"
 LOG_DIR="logs/registration"
 
 # ── Parse --config argument ───────────────────────────────────────────────────
