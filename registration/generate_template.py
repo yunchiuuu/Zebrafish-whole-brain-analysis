@@ -13,7 +13,8 @@ Usage:
     python registration/generate_template.py
 
 Outputs (all written to TEMPLATE_DIR):
-    template_mean_brain.nii.gz              — final averaged template
+    template_mean_brain_<TEMPLATE_VERSION>.nii.gz — final averaged template
+                                            (filename from config_registration.MEAN_BRAIN_FNAME)
     fish2_fixed.nii.gz                      — fixed reference
     fish{1,3}/fish{1,3}_syn_registered.nii.gz      — warped (downsampled)
     fish{1,3}/fish{1,3}_registered_final.nii.gz    — warped (full-res)
@@ -52,6 +53,11 @@ import h5py
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from registration import syn_registration
 
+# Versioned template filename comes from the registration config
+# (bump TEMPLATE_VERSION there when you regenerate the template).
+sys.path.insert(0, str(Path(__file__).resolve().parent / "config"))
+from config_registration import MEAN_BRAIN_FNAME
+
 print(f"✅ TMPDIR={os.environ['TMPDIR']} | ITK threads={n_threads}")
 
 # ---------------------------------------------------------------------------
@@ -69,7 +75,7 @@ FIXED_KEY = "fish2"
 TEMPLATE_DIR = BASE / "zstack_template"
 
 # Voxel spacing for 300 µm Zstacks
-RES_X, RES_Y, RES_Z = 1.52, 1.52, 7.5
+RES_X, RES_Y, RES_Z = 1.52, 1.52, 6.25
 ROTATION_K = 2
 
 # Isotropic target spacing for registration (match your config_registration)
@@ -287,7 +293,7 @@ def main():
         direction=fixed_raw.direction,
     )
 
-    out_path = TEMPLATE_DIR / "template_mean_brain.nii.gz"
+    out_path = TEMPLATE_DIR / MEAN_BRAIN_FNAME
     ants.image_write(mean_img, str(out_path))
     print(f"\n✅ Template written to: {out_path}")
     print(f"   All outputs in:     {TEMPLATE_DIR}")

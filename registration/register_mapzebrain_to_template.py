@@ -2,7 +2,7 @@
 register_mapzebrain_to_template.py
 ===================================
 Registers the MapZebrain GCaMP reference brain to the 300 µm data mean brain
-(template_mean_brain.nii.gz), then warps every region mask (.tif) from the
+(template_mean_brain_<version>.nii.gz), then warps every region mask (.tif) from the
 MapZebrain regions folder into that same template space.
 
 Pipeline mirrors run_registration_syn.py exactly:
@@ -29,7 +29,7 @@ Moving (MapZebrain GCaMP brain):
 
 Fixed (data mean brain):
     /home/ychiu/yun/lightsheet/analysis_output/registration/
-    template_mean_brain.nii.gz
+    template_mean_brain_<version>.nii.gz
 
 Region masks:
     /home/ychiu/yun/lightsheet/mapzebrain/regions/*.tif
@@ -86,6 +86,10 @@ import ants
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from registration import load_mapzebrain_reference_brain, syn_registration
 
+# Versioned template filename comes from the registration config.
+sys.path.insert(0, str(Path(__file__).resolve().parent / "config"))
+from config_registration import MEAN_BRAIN_FNAME
+
 print(f"✅ TMPDIR={os.environ['TMPDIR']} | ITK threads={n_threads}")
 
 
@@ -106,7 +110,7 @@ MAPZEBRAIN_SPACING = (0.9940709, 0.9939616, 1.0)
 # Data mean brain (fixed) — the 300 µm Zstack template
 FIXED_BRAIN = (
     "/home/ychiu/yun/lightsheet/analysis_output/registration/"
-    "template_mean_brain.nii.gz"
+    + MEAN_BRAIN_FNAME
 )
 
 # MapZebrain region masks directory (binary .tif files, one per region)

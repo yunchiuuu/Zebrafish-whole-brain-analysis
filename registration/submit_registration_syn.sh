@@ -1,18 +1,41 @@
 #!/bin/bash
 # submit_registration_syn.sh
 # ==========================
-# Submit one sbatch job per fish for SyN registration to the shared mean brain.
-# Fish list and Python path are read directly from config_registration.py.
-# Run AFTER submit_mean_brain.sh has completed.
+# Submit one sbatch job per fish for SyN registration to the shared template.
+# Fish list and Python path are read from the config passed with --config.
+# The template (generate_template.py) must already exist; its versioned
+# filename comes from the same config (MEAN_BRAIN_PATH).
+#
+# --config is a MODULE NAME under registration/config/ (no folder, no .py),
+# the same convention as the chemogenetic submit scripts.
 #
 # Usage (from repo root):
-#     bash registration/submit_registration_syn.sh
+#     bash registration/submit_registration_syn.sh --config config_registration
 
 SCRIPT="registration/run_registration_syn.py"
-CONFIG="registration/config/config_registration.py"
 CPUS=32
-MEM="256G"
+MEM="24G"
 LOG_DIR="logs/registration"
+
+# ── Parse --config argument ───────────────────────────────────────────────────
+CONFIG=""
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --config) CONFIG="$2"; shift 2 ;;
+        *) echo "Unknown argument: $1"; exit 1 ;;
+    esac
+done
+
+if [ -z "$CONFIG" ]; then
+    echo "ERROR: --config is required."
+    echo "Usage: bash registration/submit_registration_syn.sh --config config_registration"
+    exit 1
+fi
+
+if [[ "$CONFIG" == *.py || "$CONFIG" == */* ]]; then
+    echo "ERROR: --config must be a module name (e.g. config_registration), not a path: $CONFIG"
+    exit 1
+fi
 
 mkdir -p "$LOG_DIR"
 
@@ -20,21 +43,21 @@ mkdir -p "$LOG_DIR"
 PYTHON=$(python3 -c "
 import sys
 sys.path.insert(0, 'registration/config')
-from config_registration import PYTHON_BIN
+from ${CONFIG} import PYTHON_BIN
 print(PYTHON_BIN)
-")
+") || { echo "ERROR: could not import ${CONFIG} from registration/config/"; exit 1; }
 
 # Read all expt_IDs from config
 EXPT_IDS=$($PYTHON -c "
 import sys
 sys.path.insert(0, 'registration/config')
-from config_registration import all_fish
+from ${CONFIG} import all_fish
 for proj_id, expt_id in all_fish:
     print(expt_id)
 ")
 
 if [ -z "$EXPT_IDS" ]; then
-    echo "ERROR: No fish found in config. Check config_registration.py."
+    echo "ERROR: No fish found in ${CONFIG}. Check that fish are uncommented in all_fish."
     exit 1
 fi
 
